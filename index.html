@@ -1,661 +1,798 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { initializeApp } from 'firebase/app';
-import { 
-  getAuth, 
-  signInAnonymously, 
-  onAuthStateChanged,
-  signInWithCustomToken
-} from 'firebase/auth';
-import { 
-  getFirestore, 
-  collection, 
-  addDoc, 
-  onSnapshot, 
-  query, 
-  updateDoc, 
-  doc,
-  serverTimestamp
-} from 'firebase/firestore';
-import { 
-  BarChart, 
-  MessageSquare, 
-  Activity, 
-  Plus, 
-  Play, 
-  StopCircle, 
-  Users, 
-  LayoutDashboard,
-  CheckCircle2,
-  Share2,
-  Lock,
-  Unlock
-} from 'lucide-react';
-
-// --- CONFIGURACIÓN DE FIREBASE ---
-const firebaseConfig = JSON.parse(__firebase_config);
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-
-// --- TIPOS ---
-type PollType = 'wordcloud' | 'multiple_choice' | 'scale';
-
-interface Poll {
-  id: string;
-  question: string;
-  type: PollType;
-  options?: string[];
-  isActive: boolean;
-  createdAt: any;
-}
-
-interface Vote {
-  id: string;
-  pollId: string;
-  value: string | number;
-  userId: string;
-}
-
-// --- COMPONENTES UI ---
-
-const Button = ({ children, onClick, variant = 'primary', className = '', disabled = false }: any) => {
-  const baseStyle = "px-4 py-2 rounded-lg font-medium transition-all duration-200 flex items-center justify-center gap-2";
-  const variants = {
-    primary: "bg-indigo-600 text-white hover:bg-indigo-700 shadow-lg shadow-indigo-200",
-    secondary: "bg-white text-gray-700 border border-gray-200 hover:bg-gray-50",
-    danger: "bg-red-50 text-red-600 hover:bg-red-100",
-    success: "bg-emerald-600 text-white hover:bg-emerald-700",
-    ghost: "bg-transparent text-gray-500 hover:text-indigo-600 hover:bg-indigo-50"
-  };
-  
-  return (
-    <button 
-      onClick={onClick} 
-      disabled={disabled}
-      className={`${baseStyle} ${variants[variant as keyof typeof variants]} ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${className}`}
-    >
-      {children}
-    </button>
-  );
-};
-
-const Card = ({ children, className = '' }: any) => (
-  <div className={`bg-white rounded-xl shadow-sm border border-gray-100 p-6 ${className}`}>
-    {children}
-  </div>
-);
-
-// --- VISUALIZADORES DE RESULTADOS ---
-
-const WordCloud = ({ votes }: { votes: Vote[] }) => {
-  const wordCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    votes.forEach(v => {
-      const word = String(v.value).toLowerCase().trim();
-      if (word) counts[word] = (counts[word] || 0) + 1;
-    });
-    return counts;
-  }, [votes]);
-
-  const maxCount = Math.max(...Object.values(wordCounts), 1);
-
-  return (
-    <div className="flex flex-wrap justify-center items-center gap-4 min-h-[300px] p-8 bg-slate-50 rounded-xl">
-      {Object.keys(wordCounts).length === 0 ? (
-        <p className="text-gray-400 italic">Esperando respuestas...</p>
-      ) : (
-        Object.entries(wordCounts).map(([word, count]) => (
-          <span
-            key={word}
-            className="transition-all duration-500 text-indigo-600 font-bold inline-block"
-            style={{
-              fontSize: `${Math.max(1, (count / maxCount) * 4 + 1)}rem`,
-              opacity: 0.6 + (count / maxCount) * 0.4
-            }}
-          >
-            {word}
-          </span>
-        ))
-      )}
-    </div>
-  );
-};
-
-const BarChartVisual = ({ poll, votes }: { poll: Poll, votes: Vote[] }) => {
-  const data = useMemo(() => {
-    const counts: Record<string, number> = {};
-    poll.options?.forEach(opt => counts[opt] = 0);
-    votes.forEach(v => {
-      if (counts[String(v.value)] !== undefined) {
-        counts[String(v.value)]++;
-      }
-    });
-    return counts;
-  }, [poll, votes]);
-
-  const totalVotes = votes.length || 1;
-
-  return (
-    <div className="space-y-4 py-4">
-      {poll.options?.map((option) => {
-        const count = data[option] || 0;
-        const percentage = Math.round((count / totalVotes) * 100);
-        return (
-          <div key={option} className="space-y-1">
-            <div className="flex justify-between text-sm font-medium text-gray-600">
-              <span>{option}</span>
-              <span>{count} ({percentage}%)</span>
-            </div>
-            <div className="h-4 bg-gray-100 rounded-full overflow-hidden">
-              <div 
-                className="h-full bg-indigo-500 transition-all duration-1000 ease-out"
-                style={{ width: `${votes.length === 0 ? 0 : percentage}%` }}
-              />
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-};
-
-const ScaleVisual = ({ votes }: { votes: Vote[] }) => {
-  const average = useMemo(() => {
-    if (votes.length === 0) return 0;
-    const sum = votes.reduce((acc, v) => acc + Number(v.value), 0);
-    return (sum / votes.length).toFixed(1);
-  }, [votes]);
-
-  return (
-    <div className="flex flex-col items-center justify-center py-10 space-y-6">
-      <div className="relative w-48 h-48 flex items-center justify-center">
-        <div className="absolute inset-0 rounded-full border-[12px] border-gray-100"></div>
-        <div 
-          className="absolute inset-0 rounded-full border-[12px] border-indigo-500 border-t-transparent border-l-transparent"
-          style={{ 
-            transform: `rotate(${ -45 + (Number(average) * 27)}deg)`,
-            transition: 'transform 1s ease-out'
-          }}
-        ></div>
-        <div className="text-center">
-          <span className="text-5xl font-bold text-gray-800">{average}</span>
-          <span className="block text-gray-400 text-sm mt-1">Promedio</span>
-        </div>
-      </div>
-      <div className="w-full max-w-md bg-gray-200 h-2 rounded-full mt-4 relative">
-         <div 
-           className="absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-indigo-600 rounded-full shadow-lg transition-all duration-500"
-           style={{ left: `${Number(average) * 10}%` }}
-         />
-      </div>
-      <div className="flex justify-between w-full max-w-md text-xs text-gray-400 font-mono">
-        <span>0</span>
-        <span>5</span>
-        <span>10</span>
-      </div>
-    </div>
-  );
-};
-
-// --- APLICACIÓN PRINCIPAL ---
-
-export default function App() {
-  const [user, setUser] = useState<any>(null);
-  const [view, setView] = useState<'admin' | 'participant'>('participant');
-  const [isPresenter, setIsPresenter] = useState(false);
-  
-  // Data State
-  const [polls, setPolls] = useState<Poll[]>([]);
-  const [activePoll, setActivePoll] = useState<Poll | null>(null);
-  const [votes, setVotes] = useState<Vote[]>([]);
-  
-  // Form States
-  const [isCreating, setIsCreating] = useState(false);
-  const [newQuestion, setNewQuestion] = useState('');
-  const [newType, setNewType] = useState<PollType>('wordcloud');
-  const [newOptions, setNewOptions] = useState<string[]>(['', '']);
-  const [participantAnswer, setParticipantAnswer] = useState<string | number>('');
-  const [hasVoted, setHasVoted] = useState(false);
-  const [copySuccess, setCopySuccess] = useState('');
-
-  // Auth & Init
-  useEffect(() => {
-    const initAuth = async () => {
-      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-        await signInWithCustomToken(auth, __initial_auth_token);
-      } else {
-        await signInAnonymously(auth);
-      }
-    };
-    initAuth();
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CNCI Virtual - Encuestas</title>
     
-    // Check URL for admin hash on load
-    if (window.location.hash === '#admin') {
-      setIsPresenter(true);
-      setView('admin');
-    }
-
-    return onAuthStateChanged(auth, setUser);
-  }, []);
-
-  // Fetch Polls
-  useEffect(() => {
-    if (!user) return;
-    const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'polls'));
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
     
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const loadedPolls = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Poll));
-      loadedPolls.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
-      setPolls(loadedPolls);
-      const active = loadedPolls.find(p => p.isActive);
-      setActivePoll(active || null);
-    }, (error) => console.error("Error fetching polls:", error));
-    
-    return () => unsubscribe();
-  }, [user]);
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
 
-  // Fetch Votes
-  useEffect(() => {
-    if (!user) return;
-    const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'votes'));
-    
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const allVotes = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Vote));
-      if (activePoll) {
-        setVotes(allVotes.filter(v => v.pollId === activePoll.id));
-      } else {
-        setVotes([]);
-      }
-    }, (error) => console.error("Error fetching votes:", error));
+    <!-- Configuración personalizada de Tailwind -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        cnci: {
+                            blue: '#2a6aff',
+                            dark: '#1a4ac0',
+                            orange: '#ff8500',
+                            orangeHover: '#e67800'
+                        }
+                    },
+                    animation: {
+                        'bounce-slow': 'bounce 3s infinite',
+                        'pulse-fast': 'pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                        'float': 'float 3s ease-in-out infinite',
+                    },
+                    keyframes: {
+                        float: {
+                            '0%, 100%': { transform: 'translateY(0)' },
+                            '50%': { transform: 'translateY(-10px)' },
+                        }
+                    }
+                }
+            }
+        }
+    </script>
 
-    return () => unsubscribe();
-  }, [user, activePoll?.id]);
+    <style>
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in {
+            animation: fadeIn 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+        
+        /* Estilos personalizados para inputs */
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 24px;
+            width: 24px;
+            border-radius: 50%;
+            background: #ff8500;
+            border: 2px solid white;
+            cursor: pointer;
+            margin-top: -10px;
+            box-shadow: 0 4px 6px -1px rgba(255, 133, 0, 0.4);
+            transition: transform 0.1s;
+        }
+        input[type=range]::-webkit-slider-thumb:hover {
+            transform: scale(1.1);
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 6px;
+            background: #e2e8f0;
+            border-radius: 999px;
+        }
+        
+        .glass-effect {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+        }
+    </style>
+</head>
+<body class="bg-slate-50 font-sans text-slate-800 min-h-screen flex flex-col selection:bg-cnci-orange selection:text-white">
 
-  useEffect(() => {
-    setHasVoted(false);
-    setParticipantAnswer('');
-  }, [activePoll?.id]);
-
-  // Actions
-  const handleCreatePoll = async () => {
-    if (!newQuestion.trim()) return;
-    const pollData = {
-      question: newQuestion,
-      type: newType,
-      options: newType === 'multiple_choice' ? newOptions.filter(o => o.trim()) : [],
-      isActive: false,
-      createdAt: serverTimestamp()
-    };
-    try {
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'polls'), pollData);
-      setIsCreating(false);
-      setNewQuestion('');
-      setNewOptions(['', '']);
-    } catch (e) {
-      console.error("Error creating poll", e);
-    }
-  };
-
-  const togglePollStatus = async (poll: Poll) => {
-    try {
-      const pollsRef = collection(db, 'artifacts', appId, 'public', 'data', 'polls');
-      if (!poll.isActive) {
-        const activePromises = polls
-          .filter(p => p.isActive)
-          .map(p => updateDoc(doc(pollsRef, p.id), { isActive: false }));
-        await Promise.all(activePromises);
-      }
-      await updateDoc(doc(pollsRef, poll.id), { isActive: !poll.isActive });
-    } catch (e) {
-      console.error("Error toggling poll", e);
-    }
-  };
-
-  const submitVote = async () => {
-    if (!activePoll || !user) return;
-    if (participantAnswer === '' && activePoll.type !== 'scale') return;
-
-    try {
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'votes'), {
-        pollId: activePoll.id,
-        value: participantAnswer,
-        userId: user.uid,
-        createdAt: serverTimestamp()
-      });
-      if (activePoll.type !== 'wordcloud') {
-        setHasVoted(true);
-      } else {
-        setParticipantAnswer('');
-      }
-    } catch (e) {
-      console.error("Error voting", e);
-    }
-  };
-
-  const copyLink = () => {
-    // Copiar solo la URL base sin el hash #admin
-    const url = window.location.href.split('#')[0];
-    const el = document.createElement('textarea');
-    el.value = url;
-    document.body.appendChild(el);
-    el.select();
-    document.execCommand('copy');
-    document.body.removeChild(el);
-    setCopySuccess('¡Enlace copiado!');
-    setTimeout(() => setCopySuccess(''), 2000);
-  };
-
-  const togglePresenterMode = () => {
-    const newStatus = !isPresenter;
-    setIsPresenter(newStatus);
-    if (newStatus) {
-      setView('admin');
-      window.location.hash = 'admin';
-    } else {
-      setView('participant');
-      // Remove hash cleanly
-      history.pushState("", document.title, window.location.pathname + window.location.search);
-    }
-  };
-
-  if (!user) return <div className="min-h-screen flex items-center justify-center bg-gray-50 text-gray-500">Cargando aplicación...</div>;
-
-  return (
-    <div className="min-h-screen bg-slate-100 font-sans text-slate-800 pb-20 flex flex-col">
-      {/* Header */}
-      <header className="bg-indigo-900 text-white shadow-lg sticky top-0 z-50">
-        <div className="max-w-4xl mx-auto px-4 py-4 flex justify-between items-center">
-          <div className="flex items-center gap-2">
-            <div className="bg-indigo-500 p-2 rounded-lg">
-              <BarChart className="w-6 h-6 text-white" />
-            </div>
-            <h1 className="text-xl font-bold tracking-tight">MentiClone</h1>
-          </div>
-          
-          {/* Solo mostrar controles si es presentador */}
-          {isPresenter ? (
-            <div className="flex bg-indigo-800 rounded-lg p-1">
-              <button
-                onClick={() => setView('participant')}
-                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${view === 'participant' ? 'bg-white text-indigo-900 shadow-sm' : 'text-indigo-200 hover:text-white'}`}
-              >
-                Participar
-              </button>
-              <button
-                onClick={() => setView('admin')}
-                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${view === 'admin' ? 'bg-white text-indigo-900 shadow-sm' : 'text-indigo-200 hover:text-white'}`}
-              >
-                Admin
-              </button>
-            </div>
-          ) : (
-            <div className="text-xs font-medium bg-indigo-800/50 px-3 py-1 rounded-full text-indigo-200">
-              Modo Participante
-            </div>
-          )}
-        </div>
-      </header>
-
-      <main className="max-w-4xl mx-auto px-4 py-8 flex-1 w-full">
-        {/* VISTA DE ADMINISTRADOR */}
-        {view === 'admin' && isPresenter && (
-          <div className="space-y-8 animate-in fade-in duration-500">
-            
-            {/* Toolbar Superior */}
-            <div className="flex justify-between items-center">
-               <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
-                  <LayoutDashboard className="w-5 h-5 text-indigo-600" />
-                  Panel de Presentador
-                </h2>
-               <div className="flex gap-2">
-                 <Button variant="secondary" onClick={copyLink} className="text-sm">
-                   {copySuccess ? <CheckCircle2 className="w-4 h-4 text-green-500" /> : <Share2 className="w-4 h-4" />}
-                   {copySuccess || "Copiar enlace para participantes"}
-                 </Button>
-                 {!isCreating && (
-                  <Button onClick={() => setIsCreating(true)}>
-                    <Plus className="w-4 h-4" /> Nueva Encuesta
-                  </Button>
-                 )}
-               </div>
-            </div>
-
-            {/* Formulario Crear */}
-            {isCreating && (
-                <Card className="border-indigo-100 shadow-md">
-                  <div className="bg-slate-50 p-6 rounded-xl border border-slate-200 space-y-4">
-                    <div>
-                      <label className="block text-sm font-medium text-slate-600 mb-1">Pregunta</label>
-                      <input 
-                        type="text" 
-                        value={newQuestion}
-                        onChange={(e) => setNewQuestion(e.target.value)}
-                        className="w-full px-4 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
-                        placeholder="¿Qué opinas sobre...?"
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-4">
-                      {[
-                        { id: 'wordcloud', icon: MessageSquare, label: 'Nube de Ideas' },
-                        { id: 'multiple_choice', icon: BarChart, label: 'Opción Múltiple' },
-                        { id: 'scale', icon: Activity, label: 'Escala (0-10)' },
-                      ].map((type) => (
-                        <button
-                          key={type.id}
-                          onClick={() => setNewType(type.id as PollType)}
-                          className={`flex flex-col items-center justify-center p-4 rounded-xl border-2 transition-all ${newType === type.id ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white hover:border-slate-300'}`}
-                        >
-                          <type.icon className="w-6 h-6 mb-2" />
-                          <span className="text-sm font-medium text-center">{type.label}</span>
-                        </button>
-                      ))}
-                    </div>
-
-                    {newType === 'multiple_choice' && (
-                      <div className="space-y-2">
-                        <label className="block text-sm font-medium text-slate-600">Opciones</label>
-                        {newOptions.map((opt, idx) => (
-                          <input
-                            key={idx}
-                            type="text"
-                            value={opt}
-                            onChange={(e) => {
-                              const n = [...newOptions];
-                              n[idx] = e.target.value;
-                              setNewOptions(n);
-                            }}
-                            className="w-full px-4 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-indigo-500 outline-none mb-2"
-                            placeholder={`Opción ${idx + 1}`}
-                          />
-                        ))}
-                        <button 
-                          onClick={() => setNewOptions([...newOptions, ''])}
-                          className="text-sm text-indigo-600 font-medium hover:underline flex items-center gap-1"
-                        >
-                          <Plus className="w-3 h-3" /> Añadir opción
-                        </button>
-                      </div>
-                    )}
-
-                    <div className="flex gap-3 pt-4">
-                      <Button onClick={handleCreatePoll}>Crear Encuesta</Button>
-                      <Button variant="secondary" onClick={() => setIsCreating(false)}>Cancelar</Button>
-                    </div>
-                  </div>
-                </Card>
-            )}
-
-            {/* Dashboard Principal */}
-            <div className="grid md:grid-cols-3 gap-6">
-              {/* Sidebar Lista */}
-              <div className="md:col-span-1 space-y-4">
-                <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">Mis Encuestas</h3>
-                {polls.length === 0 ? (
-                  <p className="text-sm text-slate-400">No hay encuestas creadas.</p>
-                ) : (
-                  polls.map(poll => (
-                    <div 
-                      key={poll.id} 
-                      className={`p-4 rounded-xl border transition-all cursor-pointer ${poll.isActive ? 'bg-indigo-50 border-indigo-500 shadow-sm' : 'bg-white border-slate-200 hover:border-indigo-300'}`}
-                      onClick={() => !poll.isActive && togglePollStatus(poll)}
-                    >
-                      <div className="flex justify-between items-start mb-2">
-                         <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${poll.type === 'wordcloud' ? 'bg-blue-100 text-blue-700' : poll.type === 'scale' ? 'bg-amber-100 text-amber-700' : 'bg-purple-100 text-purple-700'}`}>
-                           {poll.type === 'wordcloud' ? 'Nube' : poll.type === 'scale' ? 'Escala' : 'Opciones'}
-                         </span>
-                         {poll.isActive && (
-                           <span className="flex items-center gap-1 text-xs font-bold text-green-600">
-                             <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-                             EN VIVO
-                           </span>
-                         )}
-                      </div>
-                      <h4 className="font-medium text-slate-800 text-sm line-clamp-2">{poll.question}</h4>
-                      
-                      <div className="mt-4 flex gap-2">
-                        <button 
-                          onClick={(e) => { e.stopPropagation(); togglePollStatus(poll); }}
-                          className={`flex-1 flex items-center justify-center gap-1 py-1.5 rounded-lg text-xs font-medium transition-colors ${poll.isActive ? 'bg-red-50 text-red-600 hover:bg-red-100' : 'bg-indigo-600 text-white hover:bg-indigo-700'}`}
-                        >
-                          {poll.isActive ? <><StopCircle className="w-3 h-3" /> Detener</> : <><Play className="w-3 h-3" /> Presentar</>}
-                        </button>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-
-              {/* Área de Visualización Principal */}
-              <div className="md:col-span-2">
-                 {activePoll ? (
-                   <Card className="min-h-[400px] flex flex-col">
-                     <div className="mb-6">
-                       <h2 className="text-2xl font-bold text-slate-800 text-center">{activePoll.question}</h2>
-                       <div className="flex justify-center items-center gap-2 mt-2 text-slate-500">
-                         <Users className="w-4 h-4" />
-                         <span className="text-sm font-medium">{votes.length} respuestas</span>
-                       </div>
-                     </div>
-
-                     <div className="flex-1">
-                       {activePoll.type === 'wordcloud' && <WordCloud votes={votes} />}
-                       {activePoll.type === 'multiple_choice' && <BarChartVisual poll={activePoll} votes={votes} />}
-                       {activePoll.type === 'scale' && <ScaleVisual votes={votes} />}
-                     </div>
-                   </Card>
-                 ) : (
-                   <div className="h-full min-h-[400px] flex flex-col items-center justify-center bg-white rounded-xl border-2 border-dashed border-slate-200 text-slate-400 p-8 text-center">
-                     <LayoutDashboard className="w-12 h-12 mb-4 opacity-50" />
-                     <p className="text-lg font-medium">No hay ninguna encuesta activa</p>
-                     <p className="text-sm">Selecciona "Presentar" en una encuesta de la izquierda.</p>
-                   </div>
-                 )}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* VISTA DE PARTICIPANTE */}
-        {(view === 'participant' || !isPresenter) && (
-          <div className="max-w-md mx-auto animate-in slide-in-from-bottom-4 duration-500">
-            {!activePoll ? (
-               <Card className="text-center py-12">
-                 <div className="w-20 h-20 bg-indigo-50 rounded-full flex items-center justify-center mx-auto mb-6">
-                   <div className="w-3 h-3 bg-indigo-400 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
-                   <div className="w-3 h-3 bg-indigo-400 rounded-full animate-bounce [animation-delay:-0.15s] mx-1"></div>
-                   <div className="w-3 h-3 bg-indigo-400 rounded-full animate-bounce"></div>
-                 </div>
-                 <h2 className="text-xl font-bold text-slate-800 mb-2">Esperando al presentador...</h2>
-                 <p className="text-slate-500">La encuesta aparecerá aquí cuando se active.</p>
-               </Card>
-            ) : hasVoted && activePoll.type !== 'wordcloud' ? (
-              <Card className="text-center py-12 bg-indigo-600 text-white border-none">
-                 <CheckCircle2 className="w-16 h-16 mx-auto mb-4 text-indigo-200" />
-                 <h2 className="text-2xl font-bold mb-2">¡Voto enviado!</h2>
-                 <p className="text-indigo-100">Gracias por participar.</p>
-                 <p className="text-sm mt-8 opacity-70">Mira la pantalla principal para ver los resultados.</p>
-              </Card>
-            ) : (
-              <Card>
-                <h2 className="text-2xl font-bold text-slate-800 mb-6 text-center">{activePoll.question}</h2>
-                
-                <div className="space-y-6">
-                  {/* Inputs según tipo */}
-                  {activePoll.type === 'wordcloud' && (
-                    <div>
-                      <input
-                        type="text"
-                        maxLength={25}
-                        value={participantAnswer}
-                        onChange={(e) => setParticipantAnswer(e.target.value)}
-                        placeholder="Escribe una palabra..."
-                        className="w-full px-4 py-4 text-lg border-2 border-slate-200 rounded-xl focus:border-indigo-500 focus:ring-0 outline-none text-center"
-                        onKeyDown={(e) => e.key === 'Enter' && submitVote()}
-                      />
-                      <p className="text-xs text-center text-slate-400 mt-2">Máx. 25 caracteres</p>
-                    </div>
-                  )}
-
-                  {activePoll.type === 'multiple_choice' && (
-                    <div className="space-y-3">
-                      {activePoll.options?.map((opt) => (
-                        <button
-                          key={opt}
-                          onClick={() => setParticipantAnswer(opt)}
-                          className={`w-full p-4 rounded-xl border-2 text-left transition-all ${participantAnswer === opt ? 'border-indigo-500 bg-indigo-50 text-indigo-700 shadow-md' : 'border-slate-100 bg-slate-50 hover:bg-slate-100 text-slate-700'}`}
-                        >
-                          <span className="font-medium">{opt}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-
-                  {activePoll.type === 'scale' && (
-                    <div className="py-8 px-4">
-                      <div className="text-center text-4xl font-bold text-indigo-600 mb-8">{participantAnswer || 0}</div>
-                      <input 
-                        type="range" 
-                        min="0" 
-                        max="10" 
-                        step="1"
-                        value={participantAnswer || 0}
-                        onChange={(e) => setParticipantAnswer(Number(e.target.value))}
-                        className="w-full h-3 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
-                      />
-                      <div className="flex justify-between mt-4 text-sm text-slate-400 font-medium">
-                        <span>Nada probable (0)</span>
-                        <span>Muy probable (10)</span>
-                      </div>
-                    </div>
-                  )}
-
-                  <Button 
-                    onClick={submitVote} 
-                    className="w-full py-4 text-lg shadow-xl shadow-indigo-200"
-                    disabled={activePoll.type !== 'scale' && !participantAnswer}
-                  >
-                    Enviar respuesta
-                  </Button>
+    <!-- HEADER -->
+    <header class="bg-white shadow-md sticky top-0 z-50 border-b-4 border-cnci-orange">
+        <div class="max-w-4xl mx-auto px-4 py-3 flex justify-between items-center">
+            <div class="flex items-center gap-3">
+                <div class="relative group">
+                    <img src="https://i.postimg.cc/KzxV7m0Z/CNCI_VIRTUAL_LOGO.jpg" alt="CNCI Logo" class="h-10 md:h-12 w-auto object-contain transition-transform duration-300 group-hover:scale-105">
                 </div>
-              </Card>
-            )}
-          </div>
-        )}
-      </main>
-      
-      {/* Footer para toggle de admin */}
-      <footer className="text-center py-4 text-xs text-slate-400 border-t border-slate-200 mt-auto">
-        <p>MentiClone - Encuestas en Tiempo Real</p>
-        <button 
-          onClick={togglePresenterMode}
-          className="mt-2 flex items-center gap-1 mx-auto hover:text-indigo-600 transition-colors"
-        >
-          {isPresenter ? <Unlock className="w-3 h-3" /> : <Lock className="w-3 h-3" />}
-          {isPresenter ? "Salir modo presentador" : "Acceso Presentador"}
-        </button>
-      </footer>
+            </div>
+            
+            <div id="header-controls" class="hidden flex bg-slate-100 rounded-full p-1.5 border border-slate-200">
+                <button onclick="app.setView('participant')" id="btn-view-participant" class="px-5 py-2 rounded-full text-sm font-bold transition-all transform hover:scale-105">
+                    🙋‍♂️ Participar
+                </button>
+                <button onclick="app.setView('admin')" id="btn-view-admin" class="px-5 py-2 rounded-full text-sm font-bold transition-all transform hover:scale-105">
+                    👨‍🏫 Profe
+                </button>
+            </div>
+            
+            <div id="header-badge-participant" class="flex items-center gap-2 text-xs font-bold bg-cnci-blue/10 px-4 py-2 rounded-full text-cnci-blue border border-cnci-blue/20">
+                <span class="relative flex h-2 w-2">
+                  <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-cnci-blue opacity-75"></span>
+                  <span class="relative inline-flex rounded-full h-2 w-2 bg-cnci-blue"></span>
+                </span>
+                Estudiante
+            </div>
+        </div>
+    </header>
+
+    <!-- MAIN CONTENT CONTAINER -->
+    <main id="app-container" class="max-w-4xl mx-auto px-4 py-8 flex-1 w-full relative">
+        <div id="loading" class="absolute inset-0 flex items-center justify-center bg-slate-50 z-50">
+            <div class="flex flex-col items-center gap-6 animate-float">
+                <div class="w-16 h-16 border-4 border-cnci-blue/20 border-t-cnci-blue rounded-full animate-spin"></div>
+                <p class="text-cnci-blue font-bold text-lg">Cargando experiencia... 🚀</p>
+            </div>
+        </div>
+        
+        <!-- Error Banner Template -->
+        <div id="error-banner" class="hidden fixed bottom-4 left-4 right-4 md:left-auto md:right-4 md:w-96 bg-white border-l-4 border-red-500 p-4 rounded-xl shadow-xl z-50 animate-fade-in">
+            <div class="flex items-start gap-3">
+                <div class="bg-red-100 p-2 rounded-full">
+                    <i data-lucide="alert-triangle" class="w-5 h-5 text-red-600"></i>
+                </div>
+                <div>
+                    <h4 class="font-bold text-gray-800 text-sm">¡Ups! Algo falló 😓</h4>
+                    <p id="error-message" class="text-gray-600 text-xs mt-1">Verifica tu conexión.</p>
+                </div>
+                <button onclick="document.getElementById('error-banner').classList.add('hidden')" class="ml-auto text-gray-400 hover:text-red-500 transition-colors">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+        </div>
+    </main>
+
+    <!-- PASSWORD MODAL -->
+    <div id="password-modal" class="hidden fixed inset-0 bg-cnci-blue/20 backdrop-blur-md z-50 flex items-center justify-center animate-fade-in">
+        <div class="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-sm mx-4 border border-white/50 relative overflow-hidden">
+            <div class="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-cnci-blue to-cnci-orange"></div>
+            <div class="flex flex-col gap-5 relative z-10">
+                <div class="text-center">
+                    <div class="bg-cnci-blue/10 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 rotate-3 hover:rotate-0 transition-transform duration-300">
+                        <i data-lucide="shield-check" class="w-8 h-8 text-cnci-blue"></i>
+                    </div>
+                    <h3 class="text-xl font-bold text-slate-800">Zona de Profesores 👨‍🏫</h3>
+                    <p class="text-sm text-slate-500 mt-1">Ingresa el código secreto para continuar.</p>
+                </div>
+                
+                <input type="password" id="admin-password-input" 
+                    class="w-full px-5 py-3 border-2 border-slate-200 rounded-xl focus:border-cnci-blue focus:ring-4 focus:ring-cnci-blue/10 outline-none transition-all text-center text-lg tracking-widest"
+                    placeholder="••••••••"
+                    onkeydown="if(event.key === 'Enter') app.checkPassword()">
+                
+                <p id="password-error" class="text-xs text-red-500 font-bold text-center hidden bg-red-50 py-2 rounded-lg">⛔ Contraseña incorrecta</p>
+
+                <div class="flex gap-3 mt-2">
+                    <button onclick="app.closePasswordModal()" class="flex-1 px-4 py-3 text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl font-bold transition-all">Cancelar</button>
+                    <button onclick="app.checkPassword()" class="flex-1 px-4 py-3 text-white bg-cnci-blue hover:bg-cnci-dark shadow-lg shadow-cnci-blue/30 rounded-xl font-bold transition-all transform hover:-translate-y-1">Entrar 🔓</button>
+                </div>
+            </div>
+        </div>
     </div>
-  );
-}
+
+    <!-- FOOTER -->
+    <footer class="text-center py-6 text-xs text-slate-400 border-t border-slate-200 mt-auto bg-white">
+        <p class="font-medium">Hecho con 🧡 para la comunidad CNCI</p>
+        <button onclick="app.togglePresenterMode()" class="mt-3 flex items-center gap-2 mx-auto px-4 py-1.5 rounded-full hover:bg-slate-100 transition-all text-slate-500 hover:text-cnci-blue">
+            <i id="lock-icon" data-lucide="lock" class="w-3 h-3"></i>
+            <span id="footer-text" class="font-semibold">Acceso Profesor</span>
+        </button>
+    </footer>
+
+    <!-- FIREBASE & APP LOGIC -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAnalytics } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-analytics.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, updateDoc, doc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyBpBgDVcRQ4C6QlXGGLd6Wdh0yesn8Nmi4",
+            authDomain: "menticnci.firebaseapp.com",
+            projectId: "menticnci",
+            storageBucket: "menticnci.firebasestorage.app",
+            messagingSenderId: "313478320731",
+            appId: "1:313478320731:web:fbb7a6d68445fc5ff1257e",
+            measurementId: "G-NELVJXHHSB"
+        };
+
+        const firebaseApp = initializeApp(firebaseConfig);
+        const analytics = getAnalytics(firebaseApp);
+        const auth = getAuth(firebaseApp);
+        const db = getFirestore(firebaseApp);
+        
+        const APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'menticnci-default'; 
+
+        const state = {
+            user: null,
+            view: 'participant',
+            isPresenter: false,
+            polls: [],
+            activePoll: null,
+            votes: [],
+            isCreating: false,
+            newPoll: { question: '', type: 'wordcloud', options: ['', ''] },
+            participantAnswer: '',
+            hasVoted: false,
+            listeners: []
+        };
+
+        const container = document.getElementById('app-container');
+        const loadingScreen = document.getElementById('loading');
+        
+        class MentiApp {
+            constructor() { this.init(); }
+
+            async init() {
+                try {
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                         await signInWithCustomToken(auth, __initial_auth_token);
+                    } else {
+                         await signInAnonymously(auth);
+                    }
+                } catch (e) { try { await signInAnonymously(auth); } catch (e) {} }
+
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        state.user = user;
+                        this.startListeners();
+                        loadingScreen.style.display = 'none';
+                        this.render();
+                    }
+                });
+
+                if (window.location.hash === '#admin') this.showPasswordModal();
+                this.updateHeader();
+            }
+
+            startListeners() {
+                state.listeners.forEach(unsub => unsub());
+                state.listeners = [];
+                if (!state.user) return;
+
+                const pollsQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'polls'));
+                const unsubPolls = onSnapshot(pollsQuery, (snapshot) => {
+                    const loadedPolls = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+                    loadedPolls.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+                    state.polls = loadedPolls;
+                    const newActive = loadedPolls.find(p => p.isActive);
+                    if (state.activePoll?.id !== newActive?.id) {
+                        state.hasVoted = false;
+                        state.participantAnswer = '';
+                    }
+                    state.activePoll = newActive || null;
+                    this.render();
+                }, (error) => this.handleFirestoreError(error));
+
+                const votesQuery = query(collection(db, 'artifacts', APP_ID, 'public', 'data', 'votes'));
+                const unsubVotes = onSnapshot(votesQuery, (snapshot) => {
+                    const allVotes = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+                    state.votes = allVotes;
+                    this.render();
+                });
+                state.listeners.push(unsubPolls, unsubVotes);
+            }
+
+            handleFirestoreError(error) {
+                if (error.code === 'permission-denied') this.showError(`🔒 Permiso denegado. Revisa las reglas.`);
+                else this.showError(`Error cargando: ${error.message}`);
+            }
+
+            showError(msg) {
+                const banner = document.getElementById('error-banner');
+                const text = document.getElementById('error-message');
+                if (banner && text) { text.innerHTML = msg; banner.classList.remove('hidden'); }
+            }
+
+            setView(viewName) {
+                if (viewName === 'admin' && !state.isPresenter) { this.showPasswordModal(); return; }
+                state.view = viewName;
+                this.updateHeader();
+                this.render();
+            }
+
+            togglePresenterMode() {
+                if (state.isPresenter) {
+                    state.isPresenter = false;
+                    this.setView('participant');
+                    history.pushState("", document.title, window.location.pathname + window.location.search);
+                    this.updateFooterState();
+                } else {
+                    this.showPasswordModal();
+                }
+            }
+
+            showPasswordModal() {
+                const modal = document.getElementById('password-modal');
+                const input = document.getElementById('admin-password-input');
+                const error = document.getElementById('password-error');
+                if (modal) {
+                    modal.classList.remove('hidden');
+                    if(input) { input.value = ''; input.focus(); input.classList.remove('border-red-500'); }
+                    if(error) error.classList.add('hidden');
+                }
+            }
+
+            closePasswordModal() {
+                document.getElementById('password-modal').classList.add('hidden');
+                if (window.location.hash === '#admin' && !state.isPresenter) history.pushState("", document.title, window.location.pathname + window.location.search);
+            }
+
+            checkPassword() {
+                const input = document.getElementById('admin-password-input');
+                const error = document.getElementById('password-error');
+                if (input.value === 'cnci2025') {
+                    state.isPresenter = true;
+                    document.getElementById('password-modal').classList.add('hidden');
+                    this.setView('admin');
+                    window.location.hash = 'admin';
+                    this.updateFooterState();
+                } else {
+                    error.classList.remove('hidden');
+                    input.classList.add('border-red-500');
+                    input.animate([{ transform: 'translateX(0)' }, { transform: 'translateX(-5px)' }, { transform: 'translateX(5px)' }, { transform: 'translateX(0)' }], { duration: 300 });
+                }
+            }
+            
+            updateFooterState() {
+                const icon = state.isPresenter ? 'unlock' : 'lock';
+                const text = state.isPresenter ? 'Salir modo Profe' : 'Acceso Profesor';
+                document.getElementById('lock-icon').setAttribute('data-lucide', icon);
+                document.getElementById('footer-text').innerText = text;
+                lucide.createIcons();
+            }
+
+            setCreateMode(isCreating) { state.isCreating = isCreating; this.render(); }
+            setNewPollType(type) { state.newPoll.type = type; this.render(); }
+            addOption() { state.newPoll.options.push(''); this.render(); }
+            updateOption(index, value) { state.newPoll.options[index] = value; }
+            updateQuestion(value) { state.newPoll.question = value; }
+            updateParticipantAnswer(value) {
+                state.participantAnswer = value;
+                const display = document.getElementById('range-display');
+                if(display) display.innerText = value;
+            }
+
+            async createPoll() {
+                if (!state.newPoll.question.trim()) return;
+                try {
+                    await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'polls'), {
+                        question: state.newPoll.question,
+                        type: state.newPoll.type,
+                        options: state.newPoll.type === 'multiple_choice' ? state.newPoll.options.filter(o => o.trim()) : [],
+                        isActive: false,
+                        createdAt: serverTimestamp()
+                    });
+                    state.isCreating = false;
+                    state.newPoll = { question: '', type: 'wordcloud', options: ['', ''] };
+                    this.render();
+                } catch (e) { this.showError("Error al crear: " + e.message); }
+            }
+
+            async togglePoll(pollId) {
+                const poll = state.polls.find(p => p.id === pollId);
+                if (!poll) return;
+                const pollsRef = collection(db, 'artifacts', APP_ID, 'public', 'data', 'polls');
+                try {
+                    if (!poll.isActive) {
+                        const activePolls = state.polls.filter(p => p.isActive);
+                        for (const p of activePolls) await updateDoc(doc(pollsRef, p.id), { isActive: false });
+                    }
+                    await updateDoc(doc(pollsRef, poll.id), { isActive: !poll.isActive });
+                } catch (e) { this.showError("Error al activar: " + e.message); }
+            }
+
+            async submitVote() {
+                if (!state.activePoll || !state.user) return;
+                const val = state.participantAnswer;
+                if (val === '' && state.activePoll.type !== 'scale') return;
+                try {
+                    await addDoc(collection(db, 'artifacts', APP_ID, 'public', 'data', 'votes'), {
+                        pollId: state.activePoll.id,
+                        value: val,
+                        userId: state.user.uid,
+                        createdAt: serverTimestamp()
+                    });
+                    if (state.activePoll.type !== 'wordcloud') state.hasVoted = true;
+                    else state.participantAnswer = '';
+                    this.render();
+                } catch (e) { this.showError("Error al votar."); }
+            }
+            
+            copyLink() {
+                const url = window.location.href.split('#')[0];
+                navigator.clipboard.writeText(url).then(() => {
+                    const btn = document.getElementById('btn-copy');
+                    const originalHTML = btn.innerHTML;
+                    btn.innerHTML = `<i data-lucide="check" class="w-4 h-4 text-green-500"></i> ¡Listo!`;
+                    lucide.createIcons();
+                    setTimeout(() => { btn.innerHTML = originalHTML; lucide.createIcons(); }, 2000);
+                });
+            }
+
+            updateHeader() {
+                const controls = document.getElementById('header-controls');
+                const badge = document.getElementById('header-badge-participant');
+                const btnAdmin = document.getElementById('btn-view-admin');
+                const btnPart = document.getElementById('btn-view-participant');
+
+                if (state.isPresenter) {
+                    controls.classList.remove('hidden');
+                    badge.classList.add('hidden');
+                    if (state.view === 'admin') {
+                        btnAdmin.className = "px-5 py-2 rounded-full text-sm font-bold bg-cnci-blue text-white shadow-lg shadow-cnci-blue/30 transition-all transform scale-105";
+                        btnPart.className = "px-5 py-2 rounded-full text-sm font-bold text-slate-500 hover:text-cnci-blue hover:bg-slate-50 transition-all";
+                    } else {
+                        btnPart.className = "px-5 py-2 rounded-full text-sm font-bold bg-cnci-orange text-white shadow-lg shadow-cnci-orange/30 transition-all transform scale-105";
+                        btnAdmin.className = "px-5 py-2 rounded-full text-sm font-bold text-slate-500 hover:text-cnci-blue hover:bg-slate-50 transition-all";
+                    }
+                } else {
+                    controls.classList.add('hidden');
+                    badge.classList.remove('hidden');
+                }
+                lucide.createIcons();
+            }
+
+            render() {
+                container.innerHTML = '';
+                if (state.view === 'admin' && state.isPresenter) this.renderAdminView();
+                else this.renderParticipantView();
+                lucide.createIcons();
+            }
+
+            renderAdminView() {
+                const activeVotes = state.activePoll ? state.votes.filter(v => v.pollId === state.activePoll.id) : [];
+                const html = `
+                    <div class="space-y-8 animate-fade-in">
+                        <div class="flex flex-col md:flex-row justify-between items-center gap-4">
+                            <h2 class="text-2xl font-black text-slate-800 flex items-center gap-3">
+                                <span class="bg-cnci-blue text-white p-2 rounded-lg rotate-3"><i data-lucide="layout-dashboard" class="w-6 h-6"></i></span>
+                                Panel del Profesor
+                            </h2>
+                            <div class="flex gap-3">
+                                <button id="btn-copy" onclick="app.copyLink()" class="px-4 py-2 bg-white text-slate-600 border-2 border-slate-200 hover:border-cnci-blue hover:text-cnci-blue rounded-xl font-bold text-sm flex items-center gap-2 transition-all">
+                                    <i data-lucide="share-2" class="w-4 h-4"></i> Compartir Link
+                                </button>
+                                ${!state.isCreating ? `
+                                    <button onclick="app.setCreateMode(true)" class="px-5 py-2 bg-cnci-blue text-white hover:bg-cnci-dark shadow-lg shadow-cnci-blue/30 rounded-xl font-bold flex items-center gap-2 transition-all transform hover:-translate-y-1">
+                                        <i data-lucide="plus" class="w-5 h-5"></i> Nueva Pregunta
+                                    </button>
+                                ` : ''}
+                            </div>
+                        </div>
+
+                        ${state.isCreating ? this.getCreateFormHTML() : ''}
+
+                        <div class="grid md:grid-cols-3 gap-6">
+                            <div class="md:col-span-1 space-y-4">
+                                <h3 class="text-xs font-black text-slate-400 uppercase tracking-widest pl-2">Tus Encuestas 📚</h3>
+                                ${state.polls.length === 0 ? `
+                                    <div class="text-center p-8 border-2 border-dashed border-slate-200 rounded-2xl bg-slate-50/50">
+                                        <div class="text-4xl mb-2">😴</div>
+                                        <p class="text-sm text-slate-400 font-medium">Aún no hay nada por aquí.</p>
+                                    </div>
+                                ` : ''}
+                                ${state.polls.map(poll => this.getPollItemHTML(poll)).join('')}
+                            </div>
+                            <div class="md:col-span-2">
+                                ${state.activePoll ? `
+                                    <div class="bg-white rounded-3xl shadow-xl shadow-slate-200/50 border border-slate-100 p-8 min-h-[450px] flex flex-col relative overflow-hidden">
+                                        <div class="absolute top-0 right-0 p-4 opacity-10 pointer-events-none">
+                                            <i data-lucide="bar-chart" class="w-32 h-32 text-cnci-blue"></i>
+                                        </div>
+                                        <div class="mb-8 relative z-10">
+                                            <div class="inline-flex items-center gap-2 bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs font-bold mb-3 animate-pulse">
+                                                <span class="w-2 h-2 rounded-full bg-green-500"></span> EN VIVO
+                                            </div>
+                                            <h2 class="text-3xl font-black text-slate-800 leading-tight">${state.activePoll.question}</h2>
+                                            <div class="flex items-center gap-2 mt-3 text-slate-500 font-medium">
+                                                <i data-lucide="users" class="w-5 h-5 text-cnci-orange"></i>
+                                                <span>${activeVotes.length} participantes han votado</span>
+                                            </div>
+                                        </div>
+                                        <div class="flex-1 w-full relative z-10">
+                                            ${this.getVisualizationHTML(state.activePoll, activeVotes)}
+                                        </div>
+                                    </div>
+                                ` : `
+                                    <div class="h-full min-h-[450px] flex flex-col items-center justify-center bg-white rounded-3xl border-2 border-dashed border-slate-200 text-slate-400 p-8 text-center group">
+                                        <div class="bg-slate-50 p-6 rounded-full mb-6 group-hover:scale-110 transition-transform duration-500">
+                                            <i data-lucide="presentation" class="w-16 h-16 text-slate-300 group-hover:text-cnci-blue transition-colors"></i>
+                                        </div>
+                                        <p class="text-xl font-bold text-slate-600">¡Hora de participar! 🎓</p>
+                                        <p class="text-sm mt-2 max-w-xs">Selecciona <span class="font-bold text-cnci-blue">"Presentar"</span> en alguna encuesta de la izquierda para comenzar la magia.</p>
+                                    </div>
+                                `}
+                            </div>
+                        </div>
+                    </div>
+                `;
+                container.innerHTML = html;
+            }
+
+            renderParticipantView() {
+                let content = '';
+                if (!state.activePoll) {
+                    content = `
+                        <div class="bg-white rounded-3xl shadow-xl shadow-slate-200/50 p-8 text-center py-16 animate-fade-in relative overflow-hidden">
+                             <div class="absolute inset-0 bg-gradient-to-b from-transparent to-slate-50/50"></div>
+                             <div class="relative z-10">
+                                 <div class="w-24 h-24 bg-cnci-blue/5 rounded-full flex items-center justify-center mx-auto mb-8 animate-float">
+                                    <span class="text-5xl">👀</span>
+                                 </div>
+                                 <h2 class="text-2xl font-black text-slate-800 mb-3">Esperando al profe...</h2>
+                                 <p class="text-slate-500 font-medium">Mantente atento, la pregunta aparecerá en breve.</p>
+                                 <div class="mt-8 flex justify-center gap-2">
+                                    <span class="w-3 h-3 bg-cnci-blue rounded-full animate-bounce" style="animation-delay: 0s"></span>
+                                    <span class="w-3 h-3 bg-cnci-orange rounded-full animate-bounce" style="animation-delay: 0.2s"></span>
+                                    <span class="w-3 h-3 bg-cnci-blue rounded-full animate-bounce" style="animation-delay: 0.4s"></span>
+                                 </div>
+                             </div>
+                        </div>
+                    `;
+                } else if (state.hasVoted && state.activePoll.type !== 'wordcloud') {
+                     content = `
+                        <div class="bg-gradient-to-br from-cnci-blue to-cnci-dark rounded-3xl shadow-xl shadow-cnci-blue/30 p-8 text-center py-16 text-white animate-fade-in relative overflow-hidden">
+                             <div class="absolute top-0 left-0 w-full h-full opacity-20">
+                                <i data-lucide="check" class="absolute -right-10 -top-10 w-64 h-64 rotate-12"></i>
+                             </div>
+                             <div class="relative z-10">
+                                 <div class="bg-white/20 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 backdrop-blur-sm animate-bounce-slow">
+                                    <i data-lucide="check" class="w-10 h-10 text-white"></i>
+                                 </div>
+                                 <h2 class="text-3xl font-black mb-3">¡Voto Recibido! 🎉</h2>
+                                 <p class="text-blue-100 text-lg font-medium">Eres parte de la estadística.</p>
+                                 <p class="text-sm mt-8 opacity-70 bg-black/10 inline-block px-4 py-2 rounded-full">Mira la pantalla principal para ver resultados</p>
+                             </div>
+                        </div>
+                    `;
+                } else {
+                    content = `
+                        <div class="bg-white rounded-3xl shadow-xl shadow-slate-200/50 p-6 md:p-8 animate-fade-in border-t-4 border-cnci-blue">
+                            <span class="inline-block bg-blue-50 text-cnci-blue px-3 py-1 rounded-full text-xs font-bold mb-4">PREGUNTA ACTUAL</span>
+                            <h2 class="text-2xl md:text-3xl font-black text-slate-800 mb-8 leading-tight">${state.activePoll.question}</h2>
+                            <div class="space-y-6">
+                                ${this.getVoteInputsHTML()}
+                                <button onclick="app.submitVote()" 
+                                    class="w-full py-4 bg-cnci-orange hover:bg-cnci-orangeHover text-white rounded-2xl text-xl font-bold shadow-lg shadow-cnci-orange/30 hover:shadow-xl transition-all transform hover:-translate-y-1 active:scale-95 flex items-center justify-center gap-2">
+                                    <span>Enviar Respuesta</span> <i data-lucide="send" class="w-5 h-5"></i>
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                }
+                container.innerHTML = `<div class="max-w-md mx-auto perspective-1000">${content}</div>`;
+            }
+
+            getCreateFormHTML() {
+                const types = [
+                    { id: 'wordcloud', icon: 'message-circle', label: 'Nube de Ideas', emoji: '☁️' },
+                    { id: 'multiple_choice', icon: 'bar-chart-2', label: 'Votación', emoji: '📊' },
+                    { id: 'scale', icon: 'sliders', label: 'Escala 1-10', emoji: '🎚️' },
+                ];
+                return `
+                    <div class="bg-white rounded-2xl shadow-lg border border-slate-100 p-6 mb-8 animate-fade-in">
+                        <div class="flex items-center justify-between mb-6">
+                            <h3 class="font-bold text-lg text-slate-700">✍️ Crear Nueva Pregunta</h3>
+                            <button onclick="app.setCreateMode(false)" class="text-slate-400 hover:text-red-500 transition-colors"><i data-lucide="x" class="w-6 h-6"></i></button>
+                        </div>
+                        
+                        <div class="space-y-6">
+                            <div>
+                                <label class="block text-sm font-bold text-slate-500 mb-2 uppercase tracking-wide">La Pregunta</label>
+                                <input type="text" 
+                                    value="${state.newPoll.question}"
+                                    oninput="app.updateQuestion(this.value)"
+                                    class="w-full px-5 py-4 rounded-xl border-2 border-slate-200 focus:border-cnci-blue focus:ring-0 outline-none font-bold text-lg text-slate-700 placeholder:font-normal transition-all"
+                                    placeholder="Ej: ¿Qué tema te pareció más difícil? 🤔">
+                            </div>
+
+                            <div>
+                                <label class="block text-sm font-bold text-slate-500 mb-3 uppercase tracking-wide">Tipo de Respuesta</label>
+                                <div class="grid grid-cols-3 gap-4">
+                                    ${types.map(t => `
+                                        <button onclick="app.setNewPollType('${t.id}')"
+                                            class="flex flex-col items-center justify-center p-4 rounded-2xl border-2 transition-all group ${state.newPoll.type === t.id ? 'border-cnci-blue bg-cnci-blue/5 text-cnci-blue ring-2 ring-cnci-blue/20 ring-offset-2' : 'border-slate-100 bg-slate-50 hover:border-slate-300 text-slate-500'}">
+                                            <span class="text-2xl mb-2 group-hover:scale-110 transition-transform">${t.emoji}</span>
+                                            <span class="text-xs font-bold text-center">${t.label}</span>
+                                        </button>
+                                    `).join('')}
+                                </div>
+                            </div>
+
+                            ${state.newPoll.type === 'multiple_choice' ? `
+                                <div class="bg-slate-50 p-5 rounded-xl border border-slate-200 animate-fade-in">
+                                    <label class="block text-sm font-bold text-slate-500 mb-3 uppercase tracking-wide">Opciones de respuesta</label>
+                                    <div class="space-y-3">
+                                        ${state.newPoll.options.map((opt, idx) => `
+                                            <div class="flex items-center gap-2">
+                                                <span class="font-bold text-slate-300 text-sm">#${idx+1}</span>
+                                                <input type="text" value="${opt}" oninput="app.updateOption(${idx}, this.value)"
+                                                    class="flex-1 px-4 py-2 rounded-lg border border-slate-300 focus:border-cnci-orange outline-none font-medium" placeholder="Opción ${idx + 1}">
+                                            </div>
+                                        `).join('')}
+                                    </div>
+                                    <button onclick="app.addOption()" class="mt-4 text-sm text-cnci-orange font-bold hover:text-orange-600 flex items-center gap-1 transition-colors">
+                                        <i data-lucide="plus-circle" class="w-4 h-4"></i> Añadir otra opción
+                                    </button>
+                                </div>
+                            ` : ''}
+
+                            <div class="flex gap-4 pt-2">
+                                <button onclick="app.createPoll()" class="flex-1 px-6 py-4 bg-cnci-blue hover:bg-cnci-dark text-white rounded-xl font-bold shadow-lg shadow-cnci-blue/20 transition-all transform hover:-translate-y-1">🚀 Lanzar Encuesta</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            getPollItemHTML(poll) {
+                const typeInfo = {
+                    wordcloud: { color: 'bg-sky-100 text-sky-700', label: 'Nube', icon: 'message-circle' },
+                    scale: { color: 'bg-purple-100 text-purple-700', label: 'Escala', icon: 'sliders' },
+                    multiple_choice: { color: 'bg-orange-100 text-orange-700', label: 'Votos', icon: 'bar-chart' }
+                };
+                const info = typeInfo[poll.type];
+
+                return `
+                    <div onclick="${!poll.isActive ? `app.togglePoll('${poll.id}')` : ''}" 
+                        class="p-5 rounded-2xl border-2 transition-all cursor-pointer group mb-3 relative overflow-hidden ${poll.isActive ? 'bg-white border-cnci-orange shadow-lg ring-4 ring-cnci-orange/10 transform scale-[1.02]' : 'bg-white border-transparent hover:border-slate-200 shadow-sm hover:shadow-md'}">
+                        
+                        ${poll.isActive ? `<div class="absolute top-0 right-0 w-16 h-16 bg-gradient-to-bl from-cnci-orange to-transparent opacity-10 rounded-bl-full"></div>` : ''}
+                        
+                        <div class="flex justify-between items-start mb-3 relative z-10">
+                             <span class="text-[10px] font-black uppercase tracking-wider px-3 py-1 rounded-full ${info.color} flex items-center gap-1">
+                                <i data-lucide="${info.icon}" class="w-3 h-3"></i> ${info.label}
+                             </span>
+                             ${poll.isActive ? `
+                               <span class="flex items-center gap-1.5 text-[10px] font-black text-green-600 bg-green-50 px-2 py-1 rounded-full border border-green-100">
+                                 <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span> AL AIRE
+                               </span>
+                             ` : ''}
+                        </div>
+                        <h4 class="font-bold text-slate-700 text-sm line-clamp-2 leading-snug group-hover:text-cnci-blue transition-colors">${poll.question}</h4>
+                        
+                        <div class="mt-4">
+                             <button onclick="event.stopPropagation(); app.togglePoll('${poll.id}')"
+                                class="w-full flex items-center justify-center gap-2 py-2 rounded-xl text-xs font-bold transition-all ${poll.isActive ? 'bg-red-50 text-red-600 hover:bg-red-100 border border-red-200' : 'bg-slate-100 text-slate-500 hover:bg-cnci-blue hover:text-white'}">
+                                ${poll.isActive ? '<i data-lucide="square" class="w-3 h-3 fill-current"></i> Terminar' : '<i data-lucide="play" class="w-3 h-3 fill-current"></i> Presentar'}
+                             </button>
+                        </div>
+                    </div>
+                `;
+            }
+
+            getVoteInputsHTML() {
+                const type = state.activePoll.type;
+                if (type === 'wordcloud') {
+                    return `
+                        <div>
+                            <div class="relative">
+                                <input type="text" maxlength="25"
+                                    oninput="app.updateParticipantAnswer(this.value)"
+                                    onkeydown="if(event.key==='Enter') app.submitVote()"
+                                    placeholder="Escribe tu idea aquí... ✨"
+                                    class="w-full px-6 py-5 text-xl font-bold text-center border-b-4 border-slate-200 bg-slate-50 rounded-t-xl focus:border-cnci-blue focus:bg-white outline-none transition-all placeholder:font-normal placeholder:text-slate-300">
+                                <div class="absolute bottom-2 right-2 text-xs font-bold text-slate-300">Máx 25</div>
+                            </div>
+                            <p class="text-xs text-center text-slate-400 mt-3 font-medium">Presiona ENTER para enviar más rápido ⚡</p>
+                        </div>
+                    `;
+                } else if (type === 'multiple_choice') {
+                    return `
+                        <div class="grid gap-3">
+                            ${state.activePoll.options.map(opt => `
+                                <button onclick="app.updateParticipantAnswer('${opt}'); this.parentElement.querySelectorAll('button').forEach(b => {b.classList.remove('border-cnci-blue', 'bg-cnci-blue', 'text-white', 'shadow-lg', 'scale-[1.02]'); b.classList.add('bg-slate-50', 'text-slate-700', 'border-slate-200')}); this.classList.remove('bg-slate-50', 'text-slate-700', 'border-slate-200'); this.classList.add('border-cnci-blue', 'bg-cnci-blue', 'text-white', 'shadow-lg', 'scale-[1.02]');"
+                                    class="w-full p-4 rounded-xl border-2 text-left transition-all bg-slate-50 hover:bg-white hover:border-cnci-blue/50 text-slate-700 font-bold text-lg flex items-center justify-between group">
+                                    <span>${opt}</span>
+                                    <div class="w-6 h-6 rounded-full border-2 border-current opacity-30 group-hover:opacity-100 flex items-center justify-center">
+                                        <div class="w-3 h-3 rounded-full bg-white opacity-0 group-[.bg-cnci-blue]:opacity-100 transition-opacity"></div>
+                                    </div>
+                                </button>
+                            `).join('')}
+                        </div>
+                    `;
+                } else if (type === 'scale') {
+                    return `
+                        <div class="py-6 px-2">
+                            <div class="flex justify-center mb-8">
+                                <div class="w-24 h-24 rounded-full border-4 border-cnci-orange flex items-center justify-center bg-orange-50 shadow-inner">
+                                    <span id="range-display" class="text-5xl font-black text-cnci-orange">0</span>
+                                </div>
+                            </div>
+                            <input type="range" min="0" max="10" step="1" value="0"
+                                oninput="app.updateParticipantAnswer(this.value)"
+                                class="w-full mb-8">
+                            <div class="flex justify-between text-xs font-bold text-slate-400 uppercase tracking-widest px-2">
+                                <span>👎 Nada</span>
+                                <span>Súper 👍</span>
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+
+            getVisualizationHTML(poll, votes) {
+                if (poll.type === 'wordcloud') {
+                    const counts = {};
+                    votes.forEach(v => { const w = String(v.value).toLowerCase().trim(); if(w) counts[w] = (counts[w] || 0) + 1; });
+                    const max = Math.max(...Object.values(counts), 1);
+                    if (Object.keys(counts).length === 0) return `
+                        <div class="flex flex-col items-center justify-center h-full text-slate-300">
+                            <i data-lucide="cloud" class="w-24 h-24 mb-4 opacity-50"></i>
+                            <p class="font-bold">Esperando las primeras ideas...</p>
+                        </div>
+                    `;
+                    
+                    // Colors for word cloud
+                    const colors = ['text-cnci-blue', 'text-cnci-orange', 'text-purple-500', 'text-pink-500', 'text-teal-500'];
+                    
+                    const wordsHTML = Object.entries(counts).map(([word, count], idx) => {
+                        const size = Math.max(1, (count / max) * 5 + 1);
+                        const opacity = 0.7 + (count / max) * 0.3;
+                        const color = colors[idx % colors.length];
+                        return `<span style="font-size: ${size}rem; opacity: ${opacity}" class="${color} font-black inline-block m-3 transition-all duration-500 hover:scale-110 cursor-default drop-shadow-sm">${word}</span>`;
+                    }).join('');
+                    return `<div class="flex flex-wrap justify-center items-center gap-2 h-full p-4 overflow-y-auto content-center">${wordsHTML}</div>`;
+                } 
+                else if (poll.type === 'multiple_choice') {
+                    const counts = {};
+                    poll.options.forEach(o => counts[o] = 0);
+                    votes.forEach(v => { if(counts[v.value] !== undefined) counts[v.value]++; });
+                    const total = votes.length || 1;
+                    return `
+                        <div class="space-y-6 py-4 px-4 h-full flex flex-col justify-center">
+                            ${poll.options.map((opt, idx) => {
+                                const count = counts[opt] || 0;
+                                const pct = Math.round((count/total)*100);
+                                const isWinner = pct > 0 && pct === Math.max(...Object.values(counts).map(c => Math.round((c/total)*100)));
+                                return `
+                                    <div class="relative">
+                                        <div class="flex justify-between text-sm font-bold text-slate-600 mb-2 z-10 relative">
+                                            <span class="flex items-center gap-2">
+                                                <span class="w-6 h-6 rounded-md bg-slate-100 flex items-center justify-center text-xs text-slate-400">${String.fromCharCode(65+idx)}</span>
+                                                ${opt}
+                                                ${isWinner && votes.length > 0 ? '👑' : ''}
+                                            </span>
+                                            <span>${count} (${pct}%)</span>
+                                        </div>
+                                        <div class="h-10 bg-slate-100 rounded-xl overflow-hidden relative shadow-inner">
+                                            <div class="h-full ${isWinner ? 'bg-cnci-orange' : 'bg-cnci-blue'} transition-all duration-1000 ease-out flex items-center justify-end px-3 relative" style="width: ${votes.length ? pct : 0}%">
+                                                ${pct > 5 ? `<span class="text-white font-bold text-xs opacity-90">${pct}%</span>` : ''}
+                                            </div>
+                                        </div>
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+                    `;
+                } 
+                else if (poll.type === 'scale') {
+                    const sum = votes.reduce((acc, v) => acc + Number(v.value), 0);
+                    const avg = votes.length ? (sum / votes.length).toFixed(1) : 0;
+                    const rotation = -45 + (Number(avg) * 27);
+                    return `
+                        <div class="flex flex-col items-center justify-center h-full py-8">
+                            <div class="relative w-64 h-32 overflow-hidden mb-8">
+                                <div class="absolute bottom-0 left-1/2 -translate-x-1/2 w-56 h-56 rounded-full border-[24px] border-slate-100 box-border"></div>
+                                <div class="absolute bottom-0 left-1/2 -translate-x-1/2 w-56 h-56 rounded-full border-[24px] border-cnci-blue border-r-transparent border-b-transparent rotate-[-45deg] box-border" style="transform: rotate(${rotation}deg); transition: transform 1s ease-out;"></div>
+                            </div>
+                            
+                            <div class="text-center -mt-10 mb-8">
+                                <div class="text-7xl font-black text-slate-800 tracking-tighter">${avg}</div>
+                                <div class="text-xs font-bold text-slate-400 uppercase tracking-widest bg-slate-100 px-3 py-1 rounded-full inline-block mt-2">Promedio General</div>
+                            </div>
+
+                            <div class="w-full max-w-sm px-8">
+                                <div class="w-full bg-slate-200 h-3 rounded-full relative shadow-inner">
+                                    <div class="absolute top-1/2 -translate-y-1/2 w-6 h-6 bg-white border-4 border-cnci-orange rounded-full shadow-lg transition-all duration-500"
+                                         style="left: calc(${Number(avg) * 10}% - 12px)"></div>
+                                </div>
+                                <div class="flex justify-between w-full text-xs font-bold text-slate-400 mt-3">
+                                    <span>0</span>
+                                    <span>5</span>
+                                    <span>10</span>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+        }
+
+        window.app = new MentiApp();
+    </script>
+</body>
+</html>
