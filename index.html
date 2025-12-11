@@ -1,0 +1,661 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { initializeApp } from 'firebase/app';
+import { 
+  getAuth, 
+  signInAnonymously, 
+  onAuthStateChanged,
+  signInWithCustomToken
+} from 'firebase/auth';
+import { 
+  getFirestore, 
+  collection, 
+  addDoc, 
+  onSnapshot, 
+  query, 
+  updateDoc, 
+  doc,
+  serverTimestamp
+} from 'firebase/firestore';
+import { 
+  BarChart, 
+  MessageSquare, 
+  Activity, 
+  Plus, 
+  Play, 
+  StopCircle, 
+  Users, 
+  LayoutDashboard,
+  CheckCircle2,
+  Share2,
+  Lock,
+  Unlock
+} from 'lucide-react';
+
+// --- CONFIGURACIÓN DE FIREBASE ---
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+
+// --- TIPOS ---
+type PollType = 'wordcloud' | 'multiple_choice' | 'scale';
+
+interface Poll {
+  id: string;
+  question: string;
+  type: PollType;
+  options?: string[];
+  isActive: boolean;
+  createdAt: any;
+}
+
+interface Vote {
+  id: string;
+  pollId: string;
+  value: string | number;
+  userId: string;
+}
+
+// --- COMPONENTES UI ---
+
+const Button = ({ children, onClick, variant = 'primary', className = '', disabled = false }: any) => {
+  const baseStyle = "px-4 py-2 rounded-lg font-medium transition-all duration-200 flex items-center justify-center gap-2";
+  const variants = {
+    primary: "bg-indigo-600 text-white hover:bg-indigo-700 shadow-lg shadow-indigo-200",
+    secondary: "bg-white text-gray-700 border border-gray-200 hover:bg-gray-50",
+    danger: "bg-red-50 text-red-600 hover:bg-red-100",
+    success: "bg-emerald-600 text-white hover:bg-emerald-700",
+    ghost: "bg-transparent text-gray-500 hover:text-indigo-600 hover:bg-indigo-50"
+  };
+  
+  return (
+    <button 
+      onClick={onClick} 
+      disabled={disabled}
+      className={`${baseStyle} ${variants[variant as keyof typeof variants]} ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${className}`}
+    >
+      {children}
+    </button>
+  );
+};
+
+const Card = ({ children, className = '' }: any) => (
+  <div className={`bg-white rounded-xl shadow-sm border border-gray-100 p-6 ${className}`}>
+    {children}
+  </div>
+);
+
+// --- VISUALIZADORES DE RESULTADOS ---
+
+const WordCloud = ({ votes }: { votes: Vote[] }) => {
+  const wordCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    votes.forEach(v => {
+      const word = String(v.value).toLowerCase().trim();
+      if (word) counts[word] = (counts[word] || 0) + 1;
+    });
+    return counts;
+  }, [votes]);
+
+  const maxCount = Math.max(...Object.values(wordCounts), 1);
+
+  return (
+    <div className="flex flex-wrap justify-center items-center gap-4 min-h-[300px] p-8 bg-slate-50 rounded-xl">
+      {Object.keys(wordCounts).length === 0 ? (
+        <p className="text-gray-400 italic">Esperando respuestas...</p>
+      ) : (
+        Object.entries(wordCounts).map(([word, count]) => (
+          <span
+            key={word}
+            className="transition-all duration-500 text-indigo-600 font-bold inline-block"
+            style={{
+              fontSize: `${Math.max(1, (count / maxCount) * 4 + 1)}rem`,
+              opacity: 0.6 + (count / maxCount) * 0.4
+            }}
+          >
+            {word}
+          </span>
+        ))
+      )}
+    </div>
+  );
+};
+
+const BarChartVisual = ({ poll, votes }: { poll: Poll, votes: Vote[] }) => {
+  const data = useMemo(() => {
+    const counts: Record<string, number> = {};
+    poll.options?.forEach(opt => counts[opt] = 0);
+    votes.forEach(v => {
+      if (counts[String(v.value)] !== undefined) {
+        counts[String(v.value)]++;
+      }
+    });
+    return counts;
+  }, [poll, votes]);
+
+  const totalVotes = votes.length || 1;
+
+  return (
+    <div className="space-y-4 py-4">
+      {poll.options?.map((option) => {
+        const count = data[option] || 0;
+        const percentage = Math.round((count / totalVotes) * 100);
+        return (
+          <div key={option} className="space-y-1">
+            <div className="flex justify-between text-sm font-medium text-gray-600">
+              <span>{option}</span>
+              <span>{count} ({percentage}%)</span>
+            </div>
+            <div className="h-4 bg-gray-100 rounded-full overflow-hidden">
+              <div 
+                className="h-full bg-indigo-500 transition-all duration-1000 ease-out"
+                style={{ width: `${votes.length === 0 ? 0 : percentage}%` }}
+              />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+const ScaleVisual = ({ votes }: { votes: Vote[] }) => {
+  const average = useMemo(() => {
+    if (votes.length === 0) return 0;
+    const sum = votes.reduce((acc, v) => acc + Number(v.value), 0);
+    return (sum / votes.length).toFixed(1);
+  }, [votes]);
+
+  return (
+    <div className="flex flex-col items-center justify-center py-10 space-y-6">
+      <div className="relative w-48 h-48 flex items-center justify-center">
+        <div className="absolute inset-0 rounded-full border-[12px] border-gray-100"></div>
+        <div 
+          className="absolute inset-0 rounded-full border-[12px] border-indigo-500 border-t-transparent border-l-transparent"
+          style={{ 
+            transform: `rotate(${ -45 + (Number(average) * 27)}deg)`,
+            transition: 'transform 1s ease-out'
+          }}
+        ></div>
+        <div className="text-center">
+          <span className="text-5xl font-bold text-gray-800">{average}</span>
+          <span className="block text-gray-400 text-sm mt-1">Promedio</span>
+        </div>
+      </div>
+      <div className="w-full max-w-md bg-gray-200 h-2 rounded-full mt-4 relative">
+         <div 
+           className="absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-indigo-600 rounded-full shadow-lg transition-all duration-500"
+           style={{ left: `${Number(average) * 10}%` }}
+         />
+      </div>
+      <div className="flex justify-between w-full max-w-md text-xs text-gray-400 font-mono">
+        <span>0</span>
+        <span>5</span>
+        <span>10</span>
+      </div>
+    </div>
+  );
+};
+
+// --- APLICACIÓN PRINCIPAL ---
+
+export default function App() {
+  const [user, setUser] = useState<any>(null);
+  const [view, setView] = useState<'admin' | 'participant'>('participant');
+  const [isPresenter, setIsPresenter] = useState(false);
+  
+  // Data State
+  const [polls, setPolls] = useState<Poll[]>([]);
+  const [activePoll, setActivePoll] = useState<Poll | null>(null);
+  const [votes, setVotes] = useState<Vote[]>([]);
+  
+  // Form States
+  const [isCreating, setIsCreating] = useState(false);
+  const [newQuestion, setNewQuestion] = useState('');
+  const [newType, setNewType] = useState<PollType>('wordcloud');
+  const [newOptions, setNewOptions] = useState<string[]>(['', '']);
+  const [participantAnswer, setParticipantAnswer] = useState<string | number>('');
+  const [hasVoted, setHasVoted] = useState(false);
+  const [copySuccess, setCopySuccess] = useState('');
+
+  // Auth & Init
+  useEffect(() => {
+    const initAuth = async () => {
+      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+        await signInWithCustomToken(auth, __initial_auth_token);
+      } else {
+        await signInAnonymously(auth);
+      }
+    };
+    initAuth();
+    
+    // Check URL for admin hash on load
+    if (window.location.hash === '#admin') {
+      setIsPresenter(true);
+      setView('admin');
+    }
+
+    return onAuthStateChanged(auth, setUser);
+  }, []);
+
+  // Fetch Polls
+  useEffect(() => {
+    if (!user) return;
+    const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'polls'));
+    
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const loadedPolls = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Poll));
+      loadedPolls.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+      setPolls(loadedPolls);
+      const active = loadedPolls.find(p => p.isActive);
+      setActivePoll(active || null);
+    }, (error) => console.error("Error fetching polls:", error));
+    
+    return () => unsubscribe();
+  }, [user]);
+
+  // Fetch Votes
+  useEffect(() => {
+    if (!user) return;
+    const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'votes'));
+    
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const allVotes = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Vote));
+      if (activePoll) {
+        setVotes(allVotes.filter(v => v.pollId === activePoll.id));
+      } else {
+        setVotes([]);
+      }
+    }, (error) => console.error("Error fetching votes:", error));
+
+    return () => unsubscribe();
+  }, [user, activePoll?.id]);
+
+  useEffect(() => {
+    setHasVoted(false);
+    setParticipantAnswer('');
+  }, [activePoll?.id]);
+
+  // Actions
+  const handleCreatePoll = async () => {
+    if (!newQuestion.trim()) return;
+    const pollData = {
+      question: newQuestion,
+      type: newType,
+      options: newType === 'multiple_choice' ? newOptions.filter(o => o.trim()) : [],
+      isActive: false,
+      createdAt: serverTimestamp()
+    };
+    try {
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'polls'), pollData);
+      setIsCreating(false);
+      setNewQuestion('');
+      setNewOptions(['', '']);
+    } catch (e) {
+      console.error("Error creating poll", e);
+    }
+  };
+
+  const togglePollStatus = async (poll: Poll) => {
+    try {
+      const pollsRef = collection(db, 'artifacts', appId, 'public', 'data', 'polls');
+      if (!poll.isActive) {
+        const activePromises = polls
+          .filter(p => p.isActive)
+          .map(p => updateDoc(doc(pollsRef, p.id), { isActive: false }));
+        await Promise.all(activePromises);
+      }
+      await updateDoc(doc(pollsRef, poll.id), { isActive: !poll.isActive });
+    } catch (e) {
+      console.error("Error toggling poll", e);
+    }
+  };
+
+  const submitVote = async () => {
+    if (!activePoll || !user) return;
+    if (participantAnswer === '' && activePoll.type !== 'scale') return;
+
+    try {
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'votes'), {
+        pollId: activePoll.id,
+        value: participantAnswer,
+        userId: user.uid,
+        createdAt: serverTimestamp()
+      });
+      if (activePoll.type !== 'wordcloud') {
+        setHasVoted(true);
+      } else {
+        setParticipantAnswer('');
+      }
+    } catch (e) {
+      console.error("Error voting", e);
+    }
+  };
+
+  const copyLink = () => {
+    // Copiar solo la URL base sin el hash #admin
+    const url = window.location.href.split('#')[0];
+    const el = document.createElement('textarea');
+    el.value = url;
+    document.body.appendChild(el);
+    el.select();
+    document.execCommand('copy');
+    document.body.removeChild(el);
+    setCopySuccess('¡Enlace copiado!');
+    setTimeout(() => setCopySuccess(''), 2000);
+  };
+
+  const togglePresenterMode = () => {
+    const newStatus = !isPresenter;
+    setIsPresenter(newStatus);
+    if (newStatus) {
+      setView('admin');
+      window.location.hash = 'admin';
+    } else {
+      setView('participant');
+      // Remove hash cleanly
+      history.pushState("", document.title, window.location.pathname + window.location.search);
+    }
+  };
+
+  if (!user) return <div className="min-h-screen flex items-center justify-center bg-gray-50 text-gray-500">Cargando aplicación...</div>;
+
+  return (
+    <div className="min-h-screen bg-slate-100 font-sans text-slate-800 pb-20 flex flex-col">
+      {/* Header */}
+      <header className="bg-indigo-900 text-white shadow-lg sticky top-0 z-50">
+        <div className="max-w-4xl mx-auto px-4 py-4 flex justify-between items-center">
+          <div className="flex items-center gap-2">
+            <div className="bg-indigo-500 p-2 rounded-lg">
+              <BarChart className="w-6 h-6 text-white" />
+            </div>
+            <h1 className="text-xl font-bold tracking-tight">MentiClone</h1>
+          </div>
+          
+          {/* Solo mostrar controles si es presentador */}
+          {isPresenter ? (
+            <div className="flex bg-indigo-800 rounded-lg p-1">
+              <button
+                onClick={() => setView('participant')}
+                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${view === 'participant' ? 'bg-white text-indigo-900 shadow-sm' : 'text-indigo-200 hover:text-white'}`}
+              >
+                Participar
+              </button>
+              <button
+                onClick={() => setView('admin')}
+                className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${view === 'admin' ? 'bg-white text-indigo-900 shadow-sm' : 'text-indigo-200 hover:text-white'}`}
+              >
+                Admin
+              </button>
+            </div>
+          ) : (
+            <div className="text-xs font-medium bg-indigo-800/50 px-3 py-1 rounded-full text-indigo-200">
+              Modo Participante
+            </div>
+          )}
+        </div>
+      </header>
+
+      <main className="max-w-4xl mx-auto px-4 py-8 flex-1 w-full">
+        {/* VISTA DE ADMINISTRADOR */}
+        {view === 'admin' && isPresenter && (
+          <div className="space-y-8 animate-in fade-in duration-500">
+            
+            {/* Toolbar Superior */}
+            <div className="flex justify-between items-center">
+               <h2 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                  <LayoutDashboard className="w-5 h-5 text-indigo-600" />
+                  Panel de Presentador
+                </h2>
+               <div className="flex gap-2">
+                 <Button variant="secondary" onClick={copyLink} className="text-sm">
+                   {copySuccess ? <CheckCircle2 className="w-4 h-4 text-green-500" /> : <Share2 className="w-4 h-4" />}
+                   {copySuccess || "Copiar enlace para participantes"}
+                 </Button>
+                 {!isCreating && (
+                  <Button onClick={() => setIsCreating(true)}>
+                    <Plus className="w-4 h-4" /> Nueva Encuesta
+                  </Button>
+                 )}
+               </div>
+            </div>
+
+            {/* Formulario Crear */}
+            {isCreating && (
+                <Card className="border-indigo-100 shadow-md">
+                  <div className="bg-slate-50 p-6 rounded-xl border border-slate-200 space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-600 mb-1">Pregunta</label>
+                      <input 
+                        type="text" 
+                        value={newQuestion}
+                        onChange={(e) => setNewQuestion(e.target.value)}
+                        className="w-full px-4 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                        placeholder="¿Qué opinas sobre...?"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-4">
+                      {[
+                        { id: 'wordcloud', icon: MessageSquare, label: 'Nube de Ideas' },
+                        { id: 'multiple_choice', icon: BarChart, label: 'Opción Múltiple' },
+                        { id: 'scale', icon: Activity, label: 'Escala (0-10)' },
+                      ].map((type) => (
+                        <button
+                          key={type.id}
+                          onClick={() => setNewType(type.id as PollType)}
+                          className={`flex flex-col items-center justify-center p-4 rounded-xl border-2 transition-all ${newType === type.id ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white hover:border-slate-300'}`}
+                        >
+                          <type.icon className="w-6 h-6 mb-2" />
+                          <span className="text-sm font-medium text-center">{type.label}</span>
+                        </button>
+                      ))}
+                    </div>
+
+                    {newType === 'multiple_choice' && (
+                      <div className="space-y-2">
+                        <label className="block text-sm font-medium text-slate-600">Opciones</label>
+                        {newOptions.map((opt, idx) => (
+                          <input
+                            key={idx}
+                            type="text"
+                            value={opt}
+                            onChange={(e) => {
+                              const n = [...newOptions];
+                              n[idx] = e.target.value;
+                              setNewOptions(n);
+                            }}
+                            className="w-full px-4 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-indigo-500 outline-none mb-2"
+                            placeholder={`Opción ${idx + 1}`}
+                          />
+                        ))}
+                        <button 
+                          onClick={() => setNewOptions([...newOptions, ''])}
+                          className="text-sm text-indigo-600 font-medium hover:underline flex items-center gap-1"
+                        >
+                          <Plus className="w-3 h-3" /> Añadir opción
+                        </button>
+                      </div>
+                    )}
+
+                    <div className="flex gap-3 pt-4">
+                      <Button onClick={handleCreatePoll}>Crear Encuesta</Button>
+                      <Button variant="secondary" onClick={() => setIsCreating(false)}>Cancelar</Button>
+                    </div>
+                  </div>
+                </Card>
+            )}
+
+            {/* Dashboard Principal */}
+            <div className="grid md:grid-cols-3 gap-6">
+              {/* Sidebar Lista */}
+              <div className="md:col-span-1 space-y-4">
+                <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider">Mis Encuestas</h3>
+                {polls.length === 0 ? (
+                  <p className="text-sm text-slate-400">No hay encuestas creadas.</p>
+                ) : (
+                  polls.map(poll => (
+                    <div 
+                      key={poll.id} 
+                      className={`p-4 rounded-xl border transition-all cursor-pointer ${poll.isActive ? 'bg-indigo-50 border-indigo-500 shadow-sm' : 'bg-white border-slate-200 hover:border-indigo-300'}`}
+                      onClick={() => !poll.isActive && togglePollStatus(poll)}
+                    >
+                      <div className="flex justify-between items-start mb-2">
+                         <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${poll.type === 'wordcloud' ? 'bg-blue-100 text-blue-700' : poll.type === 'scale' ? 'bg-amber-100 text-amber-700' : 'bg-purple-100 text-purple-700'}`}>
+                           {poll.type === 'wordcloud' ? 'Nube' : poll.type === 'scale' ? 'Escala' : 'Opciones'}
+                         </span>
+                         {poll.isActive && (
+                           <span className="flex items-center gap-1 text-xs font-bold text-green-600">
+                             <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                             EN VIVO
+                           </span>
+                         )}
+                      </div>
+                      <h4 className="font-medium text-slate-800 text-sm line-clamp-2">{poll.question}</h4>
+                      
+                      <div className="mt-4 flex gap-2">
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); togglePollStatus(poll); }}
+                          className={`flex-1 flex items-center justify-center gap-1 py-1.5 rounded-lg text-xs font-medium transition-colors ${poll.isActive ? 'bg-red-50 text-red-600 hover:bg-red-100' : 'bg-indigo-600 text-white hover:bg-indigo-700'}`}
+                        >
+                          {poll.isActive ? <><StopCircle className="w-3 h-3" /> Detener</> : <><Play className="w-3 h-3" /> Presentar</>}
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {/* Área de Visualización Principal */}
+              <div className="md:col-span-2">
+                 {activePoll ? (
+                   <Card className="min-h-[400px] flex flex-col">
+                     <div className="mb-6">
+                       <h2 className="text-2xl font-bold text-slate-800 text-center">{activePoll.question}</h2>
+                       <div className="flex justify-center items-center gap-2 mt-2 text-slate-500">
+                         <Users className="w-4 h-4" />
+                         <span className="text-sm font-medium">{votes.length} respuestas</span>
+                       </div>
+                     </div>
+
+                     <div className="flex-1">
+                       {activePoll.type === 'wordcloud' && <WordCloud votes={votes} />}
+                       {activePoll.type === 'multiple_choice' && <BarChartVisual poll={activePoll} votes={votes} />}
+                       {activePoll.type === 'scale' && <ScaleVisual votes={votes} />}
+                     </div>
+                   </Card>
+                 ) : (
+                   <div className="h-full min-h-[400px] flex flex-col items-center justify-center bg-white rounded-xl border-2 border-dashed border-slate-200 text-slate-400 p-8 text-center">
+                     <LayoutDashboard className="w-12 h-12 mb-4 opacity-50" />
+                     <p className="text-lg font-medium">No hay ninguna encuesta activa</p>
+                     <p className="text-sm">Selecciona "Presentar" en una encuesta de la izquierda.</p>
+                   </div>
+                 )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* VISTA DE PARTICIPANTE */}
+        {(view === 'participant' || !isPresenter) && (
+          <div className="max-w-md mx-auto animate-in slide-in-from-bottom-4 duration-500">
+            {!activePoll ? (
+               <Card className="text-center py-12">
+                 <div className="w-20 h-20 bg-indigo-50 rounded-full flex items-center justify-center mx-auto mb-6">
+                   <div className="w-3 h-3 bg-indigo-400 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
+                   <div className="w-3 h-3 bg-indigo-400 rounded-full animate-bounce [animation-delay:-0.15s] mx-1"></div>
+                   <div className="w-3 h-3 bg-indigo-400 rounded-full animate-bounce"></div>
+                 </div>
+                 <h2 className="text-xl font-bold text-slate-800 mb-2">Esperando al presentador...</h2>
+                 <p className="text-slate-500">La encuesta aparecerá aquí cuando se active.</p>
+               </Card>
+            ) : hasVoted && activePoll.type !== 'wordcloud' ? (
+              <Card className="text-center py-12 bg-indigo-600 text-white border-none">
+                 <CheckCircle2 className="w-16 h-16 mx-auto mb-4 text-indigo-200" />
+                 <h2 className="text-2xl font-bold mb-2">¡Voto enviado!</h2>
+                 <p className="text-indigo-100">Gracias por participar.</p>
+                 <p className="text-sm mt-8 opacity-70">Mira la pantalla principal para ver los resultados.</p>
+              </Card>
+            ) : (
+              <Card>
+                <h2 className="text-2xl font-bold text-slate-800 mb-6 text-center">{activePoll.question}</h2>
+                
+                <div className="space-y-6">
+                  {/* Inputs según tipo */}
+                  {activePoll.type === 'wordcloud' && (
+                    <div>
+                      <input
+                        type="text"
+                        maxLength={25}
+                        value={participantAnswer}
+                        onChange={(e) => setParticipantAnswer(e.target.value)}
+                        placeholder="Escribe una palabra..."
+                        className="w-full px-4 py-4 text-lg border-2 border-slate-200 rounded-xl focus:border-indigo-500 focus:ring-0 outline-none text-center"
+                        onKeyDown={(e) => e.key === 'Enter' && submitVote()}
+                      />
+                      <p className="text-xs text-center text-slate-400 mt-2">Máx. 25 caracteres</p>
+                    </div>
+                  )}
+
+                  {activePoll.type === 'multiple_choice' && (
+                    <div className="space-y-3">
+                      {activePoll.options?.map((opt) => (
+                        <button
+                          key={opt}
+                          onClick={() => setParticipantAnswer(opt)}
+                          className={`w-full p-4 rounded-xl border-2 text-left transition-all ${participantAnswer === opt ? 'border-indigo-500 bg-indigo-50 text-indigo-700 shadow-md' : 'border-slate-100 bg-slate-50 hover:bg-slate-100 text-slate-700'}`}
+                        >
+                          <span className="font-medium">{opt}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {activePoll.type === 'scale' && (
+                    <div className="py-8 px-4">
+                      <div className="text-center text-4xl font-bold text-indigo-600 mb-8">{participantAnswer || 0}</div>
+                      <input 
+                        type="range" 
+                        min="0" 
+                        max="10" 
+                        step="1"
+                        value={participantAnswer || 0}
+                        onChange={(e) => setParticipantAnswer(Number(e.target.value))}
+                        className="w-full h-3 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                      />
+                      <div className="flex justify-between mt-4 text-sm text-slate-400 font-medium">
+                        <span>Nada probable (0)</span>
+                        <span>Muy probable (10)</span>
+                      </div>
+                    </div>
+                  )}
+
+                  <Button 
+                    onClick={submitVote} 
+                    className="w-full py-4 text-lg shadow-xl shadow-indigo-200"
+                    disabled={activePoll.type !== 'scale' && !participantAnswer}
+                  >
+                    Enviar respuesta
+                  </Button>
+                </div>
+              </Card>
+            )}
+          </div>
+        )}
+      </main>
+      
+      {/* Footer para toggle de admin */}
+      <footer className="text-center py-4 text-xs text-slate-400 border-t border-slate-200 mt-auto">
+        <p>MentiClone - Encuestas en Tiempo Real</p>
+        <button 
+          onClick={togglePresenterMode}
+          className="mt-2 flex items-center gap-1 mx-auto hover:text-indigo-600 transition-colors"
+        >
+          {isPresenter ? <Unlock className="w-3 h-3" /> : <Lock className="w-3 h-3" />}
+          {isPresenter ? "Salir modo presentador" : "Acceso Presentador"}
+        </button>
+      </footer>
+    </div>
+  );
+}
