@@ -72,9 +72,13 @@
             border-radius: 999px;
         }
         
-        .glass-effect {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
+        /* Scrollbar oculta para la nube de palabras en móvil */
+        .hide-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .hide-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
         }
     </style>
 </head>
@@ -504,6 +508,8 @@
 
             renderParticipantView() {
                 let content = '';
+                const activeVotes = state.activePoll ? state.votes.filter(v => v.pollId === state.activePoll.id) : [];
+
                 if (!state.activePoll) {
                     content = `
                         <div class="bg-white rounded-3xl shadow-xl shadow-slate-200/50 p-8 text-center py-16 animate-fade-in relative overflow-hidden">
@@ -524,25 +530,32 @@
                     `;
                 } else if (state.hasVoted && state.activePoll.type !== 'wordcloud') {
                      content = `
-                        <div class="bg-gradient-to-br from-cnci-blue to-cnci-dark rounded-3xl shadow-xl shadow-cnci-blue/30 p-8 text-center py-16 text-white animate-fade-in relative overflow-hidden">
-                             <div class="absolute top-0 left-0 w-full h-full opacity-20">
-                                <i data-lucide="check" class="absolute -right-10 -top-10 w-64 h-64 rotate-12"></i>
+                        <div class="bg-white rounded-3xl shadow-xl shadow-slate-200/50 p-6 md:p-8 animate-fade-in border-t-4 border-cnci-blue relative overflow-hidden">
+                             <div class="absolute top-0 right-0 p-2 opacity-5 pointer-events-none">
+                                <i data-lucide="bar-chart-2" class="w-24 h-24"></i>
                              </div>
-                             <div class="relative z-10">
-                                 <div class="bg-white/20 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 backdrop-blur-sm animate-bounce-slow">
-                                    <i data-lucide="check" class="w-10 h-10 text-white"></i>
-                                 </div>
-                                 <h2 class="text-3xl font-black mb-3">¡Voto Recibido! 🎉</h2>
-                                 <p class="text-blue-100 text-lg font-medium">Eres parte de la estadística.</p>
-                                 <p class="text-sm mt-8 opacity-70 bg-black/10 inline-block px-4 py-2 rounded-full">Mira la pantalla principal para ver resultados</p>
+                             
+                             <div class="flex items-center justify-between mb-4">
+                                <h2 class="text-xl font-black text-slate-800 leading-tight">${state.activePoll.question}</h2>
+                                <span class="bg-green-100 text-green-700 px-2 py-1 rounded-lg text-xs font-bold whitespace-nowrap">Resultados en Vivo</span>
+                             </div>
+
+                             <div class="flex-1 w-full min-h-[300px]">
+                                ${this.getVisualizationHTML(state.activePoll, activeVotes, true)}
+                             </div>
+                             
+                             <div class="mt-6 text-center">
+                                <p class="text-sm text-slate-400 font-medium">Ya has enviado tu respuesta ✅</p>
                              </div>
                         </div>
                     `;
                 } else {
+                    const isWordCloud = state.activePoll.type === 'wordcloud';
                     content = `
                         <div class="bg-white rounded-3xl shadow-xl shadow-slate-200/50 p-6 md:p-8 animate-fade-in border-t-4 border-cnci-blue">
                             <span class="inline-block bg-blue-50 text-cnci-blue px-3 py-1 rounded-full text-xs font-bold mb-4">PREGUNTA ACTUAL</span>
                             <h2 class="text-2xl md:text-3xl font-black text-slate-800 mb-8 leading-tight">${state.activePoll.question}</h2>
+                            
                             <div class="space-y-6">
                                 ${this.getVoteInputsHTML()}
                                 <button onclick="app.submitVote()" 
@@ -550,6 +563,15 @@
                                     <span>Enviar Respuesta</span> <i data-lucide="send" class="w-5 h-5"></i>
                                 </button>
                             </div>
+
+                            ${isWordCloud ? `
+                                <div class="mt-12 pt-8 border-t-2 border-slate-100">
+                                    <h3 class="text-center font-bold text-slate-400 text-sm mb-4 uppercase tracking-widest">Respuestas en Vivo 👇</h3>
+                                    <div class="min-h-[250px] bg-slate-50 rounded-2xl p-4">
+                                        ${this.getVisualizationHTML(state.activePoll, activeVotes, true)}
+                                    </div>
+                                </div>
+                            ` : ''}
                         </div>
                     `;
                 }
@@ -704,26 +726,27 @@
                 }
             }
 
-            getVisualizationHTML(poll, votes) {
+            getVisualizationHTML(poll, votes, isParticipantView = false) {
                 if (poll.type === 'wordcloud') {
                     const counts = {};
                     votes.forEach(v => { const w = String(v.value).toLowerCase().trim(); if(w) counts[w] = (counts[w] || 0) + 1; });
                     const max = Math.max(...Object.values(counts), 1);
                     if (Object.keys(counts).length === 0) return `
-                        <div class="flex flex-col items-center justify-center h-full text-slate-300">
-                            <i data-lucide="cloud" class="w-24 h-24 mb-4 opacity-50"></i>
+                        <div class="flex flex-col items-center justify-center h-full text-slate-300 min-h-[200px]">
+                            <i data-lucide="cloud" class="w-16 h-16 mb-4 opacity-50"></i>
                             <p class="font-bold">Esperando las primeras ideas...</p>
                         </div>
                     `;
                     
-                    // Colors for word cloud
                     const colors = ['text-cnci-blue', 'text-cnci-orange', 'text-purple-500', 'text-pink-500', 'text-teal-500'];
                     
                     const wordsHTML = Object.entries(counts).map(([word, count], idx) => {
-                        const size = Math.max(1, (count / max) * 5 + 1);
+                        const sizeMultiplier = isParticipantView ? 2 : 5;
+                        const size = Math.max(1, (count / max) * sizeMultiplier + 1);
                         const opacity = 0.7 + (count / max) * 0.3;
                         const color = colors[idx % colors.length];
-                        return `<span style="font-size: ${size}rem; opacity: ${opacity}" class="${color} font-black inline-block m-3 transition-all duration-500 hover:scale-110 cursor-default drop-shadow-sm">${word}</span>`;
+                        // MODIFIED: Added break-words, whitespace-normal, text-center, leading-tight and max-w-full to wrap text
+                        return `<span style="font-size: ${size}rem; opacity: ${opacity}" class="${color} font-black inline-block m-2 transition-all duration-500 hover:scale-110 cursor-default drop-shadow-sm whitespace-normal break-words max-w-full text-center leading-tight">${word}</span>`;
                     }).join('');
                     return `<div class="flex flex-wrap justify-center items-center gap-2 h-full p-4 overflow-y-auto content-center">${wordsHTML}</div>`;
                 } 
@@ -762,28 +785,57 @@
                 else if (poll.type === 'scale') {
                     const sum = votes.reduce((acc, v) => acc + Number(v.value), 0);
                     const avg = votes.length ? (sum / votes.length).toFixed(1) : 0;
-                    const rotation = -45 + (Number(avg) * 27);
+                    
+                    // SCALE FIX: Replaced Broken CSS Border Gauge with SVG Gauge
+                    // Calculate gauge arc
+                    // Gauge 0-10 spans 180 degrees (semi-circle) for simplicity
+                    // or 0-10 maps to stroke-dasharray
+                    const radius = 40;
+                    const circumference = Math.PI * radius; // Half circle length
+                    const progress = (avg / 10) * circumference;
+                    
+                    // Histogram Logic
+                    const distribution = Array(11).fill(0);
+                    votes.forEach(v => {
+                        const val = Number(v.value);
+                        if (!isNaN(val) && val >= 0 && val <= 10) distribution[val]++;
+                    });
+                    const maxDist = Math.max(...distribution, 1);
+
                     return `
-                        <div class="flex flex-col items-center justify-center h-full py-8">
-                            <div class="relative w-64 h-32 overflow-hidden mb-8">
-                                <div class="absolute bottom-0 left-1/2 -translate-x-1/2 w-56 h-56 rounded-full border-[24px] border-slate-100 box-border"></div>
-                                <div class="absolute bottom-0 left-1/2 -translate-x-1/2 w-56 h-56 rounded-full border-[24px] border-cnci-blue border-r-transparent border-b-transparent rotate-[-45deg] box-border" style="transform: rotate(${rotation}deg); transition: transform 1s ease-out;"></div>
-                            </div>
+                        <div class="flex flex-col items-center justify-center h-full py-4 space-y-6">
                             
-                            <div class="text-center -mt-10 mb-8">
-                                <div class="text-7xl font-black text-slate-800 tracking-tighter">${avg}</div>
-                                <div class="text-xs font-bold text-slate-400 uppercase tracking-widest bg-slate-100 px-3 py-1 rounded-full inline-block mt-2">Promedio General</div>
+                            <!-- New SVG Gauge (Corrected) -->
+                            <div class="relative w-48 h-28 flex justify-center overflow-hidden">
+                                <svg viewBox="0 0 100 50" class="w-full h-full transform overflow-visible">
+                                    <!-- Background Arc (Gray) -->
+                                    <path d="M 10 50 A 40 40 0 0 1 90 50" fill="none" stroke="#f1f5f9" stroke-width="12" stroke-linecap="round" />
+                                    <!-- Foreground Arc (Colored) -->
+                                    <path d="M 10 50 A 40 40 0 0 1 90 50" fill="none" stroke="#2a6aff" stroke-width="12" stroke-linecap="round" 
+                                          stroke-dasharray="${progress}, 200"
+                                          class="transition-all duration-1000 ease-out" />
+                                </svg>
+                                <!-- Value Text centered -->
+                                <div class="absolute bottom-0 text-center">
+                                    <div class="text-4xl font-black text-slate-800 tracking-tighter">${avg}</div>
+                                    <div class="text-[10px] font-bold text-slate-400 uppercase tracking-widest bg-slate-100 px-3 py-1 rounded-full inline-block">Promedio</div>
+                                </div>
                             </div>
 
-                            <div class="w-full max-w-sm px-8">
-                                <div class="w-full bg-slate-200 h-3 rounded-full relative shadow-inner">
-                                    <div class="absolute top-1/2 -translate-y-1/2 w-6 h-6 bg-white border-4 border-cnci-orange rounded-full shadow-lg transition-all duration-500"
-                                         style="left: calc(${Number(avg) * 10}% - 12px)"></div>
-                                </div>
-                                <div class="flex justify-between w-full text-xs font-bold text-slate-400 mt-3">
-                                    <span>0</span>
-                                    <span>5</span>
-                                    <span>10</span>
+                            <!-- Histogram (Distribution 0-10) -->
+                            <div class="w-full max-w-sm px-4">
+                                <p class="text-xs font-bold text-slate-400 uppercase tracking-widest text-center mb-2">Distribución de votos</p>
+                                <div class="flex items-end justify-between gap-1 h-24 border-b border-slate-200 pb-1">
+                                    ${distribution.map((count, i) => {
+                                        const height = (count / maxDist) * 100;
+                                        return `
+                                            <div class="flex-1 flex flex-col items-center justify-end group relative">
+                                                ${count > 0 ? `<div class="absolute -top-6 text-[10px] font-bold text-cnci-blue opacity-0 group-hover:opacity-100 transition-opacity">${count}</div>` : ''}
+                                                <div class="w-full bg-cnci-orange/80 rounded-t-sm hover:bg-cnci-orange transition-all duration-500" style="height: ${height || 2}%"></div>
+                                                <span class="text-[8px] text-slate-400 mt-1 font-medium">${i}</span>
+                                            </div>
+                                        `;
+                                    }).join('')}
                                 </div>
                             </div>
                         </div>
