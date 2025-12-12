@@ -397,13 +397,46 @@
             
             copyLink() {
                 const url = window.location.href.split('#')[0];
-                navigator.clipboard.writeText(url).then(() => {
-                    const btn = document.getElementById('btn-copy');
-                    const originalHTML = btn.innerHTML;
-                    btn.innerHTML = `<i data-lucide="check" class="w-4 h-4 text-green-500"></i> ¡Listo!`;
-                    lucide.createIcons();
-                    setTimeout(() => { btn.innerHTML = originalHTML; lucide.createIcons(); }, 2000);
-                });
+                
+                // Fallback para entornos donde el portapapeles está bloqueado (iframes, etc)
+                const textArea = document.createElement("textarea");
+                textArea.value = url;
+                
+                // Asegurarse de que no sea visible pero esté en el DOM
+                textArea.style.position = "fixed";
+                textArea.style.left = "-9999px";
+                textArea.style.top = "0";
+                document.body.appendChild(textArea);
+                
+                textArea.focus();
+                textArea.select();
+                
+                try {
+                    const successful = document.execCommand('copy');
+                    if (successful) {
+                        const btn = document.getElementById('btn-copy');
+                        if (btn) {
+                            const originalHTML = btn.innerHTML;
+                            btn.innerHTML = `<i data-lucide="check" class="w-4 h-4 text-green-500"></i> ¡Listo!`;
+                            lucide.createIcons();
+                            setTimeout(() => { btn.innerHTML = originalHTML; lucide.createIcons(); }, 2000);
+                        }
+                    } else {
+                        throw new Error('Fallback copy failed');
+                    }
+                } catch (err) {
+                    console.error('No se pudo copiar el enlace', err);
+                    // Intento final con la API moderna, aunque probablemente fallará si execCommand falló en este contexto
+                    navigator.clipboard.writeText(url).then(() => {
+                         const btn = document.getElementById('btn-copy');
+                         const originalHTML = btn.innerHTML;
+                         btn.innerHTML = `<i data-lucide="check" class="w-4 h-4 text-green-500"></i> ¡Listo!`;
+                         lucide.createIcons();
+                         setTimeout(() => { btn.innerHTML = originalHTML; lucide.createIcons(); }, 2000);
+                    }).catch(e => alert("No se pudo copiar automáticamente. Por favor copia la URL manualmente."));
+                }
+                
+                document.body.removeChild(textArea);
             }
 
             updateHeader() {
