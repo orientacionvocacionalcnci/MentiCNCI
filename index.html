@@ -94,11 +94,14 @@
             </div>
             
             <div id="header-controls" class="hidden flex bg-slate-100 rounded-full p-1.5 border border-slate-200">
-                <button onclick="app.setView('participant')" id="btn-view-participant" class="px-5 py-2 rounded-full text-sm font-bold transition-all transform hover:scale-105">
-                    🙋‍♂️ Participar
+                <button onclick="app.setView('participant')" id="btn-view-participant" class="px-4 py-2 rounded-full text-sm font-bold transition-all transform hover:scale-105 flex items-center gap-2">
+                    🙋‍♂️ <span class="hidden sm:inline">Participar</span>
                 </button>
-                <button onclick="app.setView('admin')" id="btn-view-admin" class="px-5 py-2 rounded-full text-sm font-bold transition-all transform hover:scale-105">
-                    👨‍🏫 Profe
+                <button onclick="app.setView('presentation')" id="btn-view-presentation" class="px-4 py-2 rounded-full text-sm font-bold transition-all transform hover:scale-105 flex items-center gap-2">
+                    📺 <span class="hidden sm:inline">Pantalla</span>
+                </button>
+                <button onclick="app.setView('admin')" id="btn-view-admin" class="px-4 py-2 rounded-full text-sm font-bold transition-all transform hover:scale-105 flex items-center gap-2">
+                    👨‍🏫 <span class="hidden sm:inline">Profe</span>
                 </button>
             </div>
             
@@ -180,7 +183,7 @@
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAnalytics } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-analytics.js";
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, addDoc, onSnapshot, query, updateDoc, doc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, updateDoc, deleteDoc, doc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         const firebaseConfig = {
             apiKey: "AIzaSyBpBgDVcRQ4C6QlXGGLd6Wdh0yesn8Nmi4",
@@ -364,6 +367,15 @@
                     this.render();
                 } catch (e) { this.showError("Error al crear: " + e.message); }
             }
+            
+            async deletePoll(pollId) {
+                if (!confirm('¿Estás seguro de eliminar esta encuesta? Esta acción no se puede deshacer.')) return;
+                try {
+                    await deleteDoc(doc(db, 'artifacts', APP_ID, 'public', 'data', 'polls', pollId));
+                } catch (e) {
+                    this.showError("Error al eliminar: " + e.message);
+                }
+            }
 
             async togglePoll(pollId) {
                 const poll = state.polls.find(p => p.id === pollId);
@@ -397,20 +409,14 @@
             
             copyLink() {
                 const url = window.location.href.split('#')[0];
-                
-                // Fallback para entornos donde el portapapeles está bloqueado (iframes, etc)
                 const textArea = document.createElement("textarea");
                 textArea.value = url;
-                
-                // Asegurarse de que no sea visible pero esté en el DOM
                 textArea.style.position = "fixed";
                 textArea.style.left = "-9999px";
                 textArea.style.top = "0";
                 document.body.appendChild(textArea);
-                
                 textArea.focus();
                 textArea.select();
-                
                 try {
                     const successful = document.execCommand('copy');
                     if (successful) {
@@ -421,21 +427,16 @@
                             lucide.createIcons();
                             setTimeout(() => { btn.innerHTML = originalHTML; lucide.createIcons(); }, 2000);
                         }
-                    } else {
-                        throw new Error('Fallback copy failed');
-                    }
+                    } else { throw new Error('Fallback copy failed'); }
                 } catch (err) {
-                    console.error('No se pudo copiar el enlace', err);
-                    // Intento final con la API moderna, aunque probablemente fallará si execCommand falló en este contexto
                     navigator.clipboard.writeText(url).then(() => {
                          const btn = document.getElementById('btn-copy');
                          const originalHTML = btn.innerHTML;
                          btn.innerHTML = `<i data-lucide="check" class="w-4 h-4 text-green-500"></i> ¡Listo!`;
                          lucide.createIcons();
                          setTimeout(() => { btn.innerHTML = originalHTML; lucide.createIcons(); }, 2000);
-                    }).catch(e => alert("No se pudo copiar automáticamente. Por favor copia la URL manualmente."));
+                    }).catch(e => alert("Copia la URL manualmente: " + url));
                 }
-                
                 document.body.removeChild(textArea);
             }
 
@@ -443,17 +444,25 @@
                 const controls = document.getElementById('header-controls');
                 const badge = document.getElementById('header-badge-participant');
                 const btnAdmin = document.getElementById('btn-view-admin');
+                const btnPresentation = document.getElementById('btn-view-presentation');
                 const btnPart = document.getElementById('btn-view-participant');
 
                 if (state.isPresenter) {
                     controls.classList.remove('hidden');
                     badge.classList.add('hidden');
+                    
+                    // Reset all
+                    [btnAdmin, btnPresentation, btnPart].forEach(btn => {
+                        btn.className = "px-4 py-2 rounded-full text-sm font-bold text-slate-500 hover:text-cnci-blue hover:bg-slate-50 transition-all flex items-center gap-2";
+                    });
+
+                    // Set Active
                     if (state.view === 'admin') {
-                        btnAdmin.className = "px-5 py-2 rounded-full text-sm font-bold bg-cnci-blue text-white shadow-lg shadow-cnci-blue/30 transition-all transform scale-105";
-                        btnPart.className = "px-5 py-2 rounded-full text-sm font-bold text-slate-500 hover:text-cnci-blue hover:bg-slate-50 transition-all";
+                        btnAdmin.className = "px-4 py-2 rounded-full text-sm font-bold bg-cnci-blue text-white shadow-lg shadow-cnci-blue/30 transition-all transform scale-105 flex items-center gap-2";
+                    } else if (state.view === 'presentation') {
+                        btnPresentation.className = "px-4 py-2 rounded-full text-sm font-bold bg-slate-800 text-white shadow-lg shadow-slate-800/30 transition-all transform scale-105 flex items-center gap-2";
                     } else {
-                        btnPart.className = "px-5 py-2 rounded-full text-sm font-bold bg-cnci-orange text-white shadow-lg shadow-cnci-orange/30 transition-all transform scale-105";
-                        btnAdmin.className = "px-5 py-2 rounded-full text-sm font-bold text-slate-500 hover:text-cnci-blue hover:bg-slate-50 transition-all";
+                        btnPart.className = "px-4 py-2 rounded-full text-sm font-bold bg-cnci-orange text-white shadow-lg shadow-cnci-orange/30 transition-all transform scale-105 flex items-center gap-2";
                     }
                 } else {
                     controls.classList.add('hidden');
@@ -465,8 +474,54 @@
             render() {
                 container.innerHTML = '';
                 if (state.view === 'admin' && state.isPresenter) this.renderAdminView();
+                else if (state.view === 'presentation') this.renderPresentationView();
                 else this.renderParticipantView();
                 lucide.createIcons();
+            }
+
+            renderPresentationView() {
+                const activeVotes = state.activePoll ? state.votes.filter(v => v.pollId === state.activePoll.id) : [];
+                let content = '';
+
+                if (!state.activePoll) {
+                    content = `
+                        <div class="h-full flex flex-col items-center justify-center animate-fade-in p-8 text-center min-h-[60vh]">
+                            <div class="bg-slate-100 p-8 rounded-full mb-6">
+                                <i data-lucide="monitor" class="w-20 h-20 text-slate-400"></i>
+                            </div>
+                            <h2 class="text-3xl font-black text-slate-700 mb-2">Vista de Pantalla</h2>
+                            <p class="text-slate-500 font-medium text-lg">Esperando que se active una encuesta...</p>
+                        </div>
+                    `;
+                } else {
+                    content = `
+                        <div class="flex flex-col h-full animate-fade-in px-4">
+                            <h2 class="text-3xl md:text-5xl font-black text-slate-800 text-center mb-8 md:mb-12 mt-4 leading-tight">
+                                ${state.activePoll.question}
+                            </h2>
+                            <div class="flex-1 flex items-center justify-center w-full max-w-6xl mx-auto min-h-[50vh]">
+                                 ${this.getVisualizationHTML(state.activePoll, activeVotes, false)}
+                            </div>
+                            <div class="text-center py-8">
+                                <div class="inline-flex items-center gap-3 bg-white border border-slate-200 shadow-sm px-6 py-2 rounded-full">
+                                    <div class="flex items-center gap-2">
+                                        <span class="relative flex h-3 w-3">
+                                          <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                                          <span class="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
+                                        </span>
+                                        <span class="font-bold text-slate-700">En Vivo</span>
+                                    </div>
+                                    <span class="w-px h-4 bg-slate-300"></span>
+                                    <div class="font-bold text-slate-500 flex items-center gap-2">
+                                        <i data-lucide="users" class="w-4 h-4"></i>
+                                        ${activeVotes.length} votos
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+                container.innerHTML = content;
             }
 
             renderAdminView() {
@@ -687,7 +742,13 @@
                         
                         ${poll.isActive ? `<div class="absolute top-0 right-0 w-16 h-16 bg-gradient-to-bl from-cnci-orange to-transparent opacity-10 rounded-bl-full"></div>` : ''}
                         
-                        <div class="flex justify-between items-start mb-3 relative z-10">
+                         <button onclick="event.stopPropagation(); app.deletePoll('${poll.id}')" 
+                                class="absolute top-2 right-2 z-20 p-2 text-slate-400 hover:text-red-500 transition-colors rounded-full hover:bg-red-50"
+                                title="Eliminar encuesta">
+                            <i data-lucide="trash-2" class="w-4 h-4"></i>
+                        </button>
+
+                        <div class="flex justify-between items-start mb-3 relative z-10 pr-8">
                              <span class="text-[10px] font-black uppercase tracking-wider px-3 py-1 rounded-full ${info.color} flex items-center gap-1">
                                 <i data-lucide="${info.icon}" class="w-3 h-3"></i> ${info.label}
                              </span>
@@ -778,7 +839,6 @@
                         const size = Math.max(1, (count / max) * sizeMultiplier + 1);
                         const opacity = 0.7 + (count / max) * 0.3;
                         const color = colors[idx % colors.length];
-                        // MODIFIED: Added break-words, whitespace-normal, text-center, leading-tight and max-w-full to wrap text
                         return `<span style="font-size: ${size}rem; opacity: ${opacity}" class="${color} font-black inline-block m-2 transition-all duration-500 hover:scale-110 cursor-default drop-shadow-sm whitespace-normal break-words max-w-full text-center leading-tight">${word}</span>`;
                     }).join('');
                     return `<div class="flex flex-wrap justify-center items-center gap-2 h-full p-4 overflow-y-auto content-center">${wordsHTML}</div>`;
@@ -819,15 +879,10 @@
                     const sum = votes.reduce((acc, v) => acc + Number(v.value), 0);
                     const avg = votes.length ? (sum / votes.length).toFixed(1) : 0;
                     
-                    // SCALE FIX: Replaced Broken CSS Border Gauge with SVG Gauge
-                    // Calculate gauge arc
-                    // Gauge 0-10 spans 180 degrees (semi-circle) for simplicity
-                    // or 0-10 maps to stroke-dasharray
                     const radius = 40;
                     const circumference = Math.PI * radius; // Half circle length
                     const progress = (avg / 10) * circumference;
                     
-                    // Histogram Logic
                     const distribution = Array(11).fill(0);
                     votes.forEach(v => {
                         const val = Number(v.value);
